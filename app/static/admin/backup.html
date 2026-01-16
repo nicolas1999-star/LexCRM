@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Admin - Backup</title>
+    <style>
+      body { font-family: Arial, sans-serif; margin: 24px; }
+      .section { margin-bottom: 24px; }
+      .warning { background: #ffe6e6; padding: 12px; border-left: 4px solid #ff0000; }
+      table { border-collapse: collapse; width: 100%; }
+      th, td { border: 1px solid #ddd; padding: 8px; }
+      th { background: #f4f4f4; }
+      button { margin-right: 8px; }
+      pre { background: #f9f9f9; padding: 12px; }
+    </style>
+  </head>
+  <body>
+    <h1>Backup e Manutenção</h1>
+
+    <div class="section">
+      <h2>Configurações</h2>
+      <label>Pasta de backup <input type="text" id="backupDir" placeholder="/caminho/backup" /></label>
+      <button id="selectDir">Selecionar pasta</button>
+      <label>Retenção <input type="number" id="retention" min="1" /></label>
+      <label>Frequência
+        <select id="frequency">
+          <option value="DAILY">Diário</option>
+          <option value="WEEKLY">Semanal</option>
+        </select>
+      </label>
+      <button id="saveSettings">Salvar</button>
+    </div>
+
+    <div class="section">
+      <h2>Executar</h2>
+      <button id="createBackup">Criar backup agora</button>
+      <button id="listBackups">Listar backups</button>
+      <button id="integrityCheck">Integrity check</button>
+      <button id="vacuum">Vacuum</button>
+    </div>
+
+    <div class="section warning">
+      <strong>Atenção:</strong> Restaurar um backup substitui o banco atual. Reinicie a aplicação após restaurar.
+    </div>
+
+    <div class="section">
+      <h2>Backups disponíveis</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Arquivo</th>
+            <th>Tamanho</th>
+            <th>Modificado</th>
+            <th>Ações</th>
+          </tr>
+        </thead>
+        <tbody id="backupRows"></tbody>
+      </table>
+    </div>
+
+    <div class="section">
+      <h2>Resultado</h2>
+      <pre id="result"></pre>
+    </div>
+
+    <script>
+      async function tauriSelectDir() {
+        if (window.__TAURI__ && window.__TAURI__.dialog && window.__TAURI__.dialog.open) {
+          return window.__TAURI__.dialog.open({ directory: true });
+        }
+        return prompt("Informe o caminho da pasta de backup");
+      }
+
+      async function loadSettings() {
+        const response = await fetch("/api/backup/settings", {
+          headers: { "X-Role": "ADMIN", "X-User-Id": "admin" },
+        });
+        const data = await response.json();
+        document.getElementById("backupDir").value = data.backup_dir || "";
+        document.getElementById("retention").value = data.backup_retention_count || 30;
+        document.getElementById("frequency").value = data.backup_frequency || "DAILY";
+      }
+
+      async function saveSettings() {
+        const payload = {
+          backup_dir: document.getElementById("backupDir").value,
+          backup_retention_count: Number(document.getElementById("retention").value || 30),
+          backup_frequency: document.getElementById("frequency").value,
+        };
+        await fetch("/api/backup/settings", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Role": "ADMIN",
+            "X-User-Id": "admin",
+          },
+          body: JSON.stringify(payload),
+        });
+      }
+
+      async function listBackups() {
+        const response = await fetch("/api/backup/list", {
+          headers: { "X-Role": "ADMIN", "X-User-Id": "admin" },
+        });
+        if (!response.ok) {
+          document.getElementById("result").textContent = "Configure a pasta de backup antes de listar.";
+          return;
+        }
+        const data = await response.json();
+        const tbody = document.getElementById("backupRows");
+        tbody.innerHTML = "";
+        data.forEach((item) => {
+          const tr = document.createElement("tr");
+          tr.innerHTML = `
+            <td>${item.name}</td>
+            <td>${Math.round(item.size / 1024)} KB</td>
+            <td>${item.modified_at}</td>
+            <td><button data-path="${item.path}">Restaurar</button></td>
+          `;
+          tr.querySelector("button").addEventListener("click", () => restoreBackup(item.path));
+          tbody.appendChild(tr);
+        });
+      }
+
+      async function createBackup() {
+        const response = await fetch("/api/backup/create", {
+          method: "POST",
+          headers: { "X-Role": "ADMIN", "X-User-Id": "admin" },
+        });
+        const data = await response.json();
+        document.getElementById("result").textContent = JSON.stringify(data, null, 2);
+        listBackups();
+      }
+
+      async function restoreBackup(path) {
+        if (!confirm("Tem certeza que deseja restaurar este backup?")) {
+          return;
+        }
+        const response = await fetch("/api/backup/restore", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Role": "ADMIN",
+            "X-User-Id": "admin",
+          },
+          body: JSON.stringify({ path }),
+        });
+        const data = await response.json();
+        document.getElementById("result").textContent = JSON.stringify(data, null, 2);
+      }
+
+      async function integrityCheck() {
+        const response = await fetch("/api/db/integrity_check", {
+          method: "POST",
+          headers: { "X-Role": "ADMIN", "X-User-Id": "admin" },
+        });
+        const data = await response.json();
+        document.getElementById("result").textContent = JSON.stringify(data, null, 2);
+      }
+
+      async function vacuumDb() {
+        const response = await fetch("/api/db/vacuum", {
+          method: "POST",
+          headers: { "X-Role": "ADMIN", "X-User-Id": "admin" },
+        });
+        const data = await response.json();
+        document.getElementById("result").textContent = JSON.stringify(data, null, 2);
+      }
+
+      document.getElementById("selectDir").addEventListener("click", async () => {
+        const dir = await tauriSelectDir();
+        if (dir) {
+          document.getElementById("backupDir").value = dir;
+        }
+      });
+      document.getElementById("saveSettings").addEventListener("click", saveSettings);
+      document.getElementById("createBackup").addEventListener("click", createBackup);
+      document.getElementById("listBackups").addEventListener("click", listBackups);
+      document.getElementById("integrityCheck").addEventListener("click", integrityCheck);
+      document.getElementById("vacuum").addEventListener("click", vacuumDb);
+
+      loadSettings();
+    </script>
+  </body>
+</html>

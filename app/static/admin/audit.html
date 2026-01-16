@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Admin - Auditoria</title>
+    <style>
+      body { font-family: Arial, sans-serif; margin: 24px; }
+      table { border-collapse: collapse; width: 100%; }
+      th, td { border: 1px solid #ddd; padding: 8px; }
+      th { background: #f4f4f4; }
+      .filters { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-bottom: 16px; }
+      .actions { display: flex; gap: 12px; margin-bottom: 16px; }
+      .pagination { margin-top: 12px; display: flex; gap: 12px; align-items: center; }
+      .notice { color: #666; font-size: 12px; }
+    </style>
+  </head>
+  <body>
+    <h1>Auditoria</h1>
+    <div class="filters">
+      <label>De <input type="datetime-local" id="from" /></label>
+      <label>Até <input type="datetime-local" id="to" /></label>
+      <label>Usuário <input type="text" id="user_id" placeholder="ID" /></label>
+      <label>Ação <input type="text" id="action" /></label>
+      <label>Entidade <input type="text" id="entity_type" /></label>
+      <label>Busca <input type="text" id="q" /></label>
+    </div>
+    <div class="actions">
+      <button id="filterBtn">Filtrar</button>
+      <button id="exportBtn">Exportar CSV</button>
+      <span class="notice">Exportação pode exigir reautenticação.</span>
+    </div>
+    <table>
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>Data</th>
+          <th>Usuário</th>
+          <th>Ação</th>
+          <th>Entidade</th>
+          <th>Mensagem</th>
+        </tr>
+      </thead>
+      <tbody id="auditRows"></tbody>
+    </table>
+    <div class="pagination">
+      <button id="prevBtn">Anterior</button>
+      <span id="pageInfo"></span>
+      <button id="nextBtn">Próxima</button>
+    </div>
+
+    <script>
+      let currentPage = 1;
+      const pageSize = 20;
+
+      function buildQuery() {
+        const params = new URLSearchParams();
+        const fields = ["from", "to", "user_id", "action", "entity_type", "q"];
+        fields.forEach((field) => {
+          const value = document.getElementById(field).value;
+          if (value) {
+            params.append(field, value);
+          }
+        });
+        params.append("page", String(currentPage));
+        params.append("page_size", String(pageSize));
+        return params.toString();
+      }
+
+      async function loadAudits() {
+        const response = await fetch(`/api/audit?${buildQuery()}`, {
+          headers: {
+            "X-Role": "ADMIN",
+            "X-User-Id": "admin",
+          },
+        });
+        const data = await response.json();
+        const rows = document.getElementById("auditRows");
+        rows.innerHTML = "";
+        data.items.forEach((item) => {
+          const tr = document.createElement("tr");
+          tr.innerHTML = `
+            <td>${item.id}</td>
+            <td>${item.created_at}</td>
+            <td>${item.user_id || ""}</td>
+            <td>${item.action}</td>
+            <td>${item.entity_type || ""}</td>
+            <td>${item.message || ""}</td>
+          `;
+          rows.appendChild(tr);
+        });
+        const totalPages = Math.max(1, Math.ceil(data.total / pageSize));
+        document.getElementById("pageInfo").textContent = `Página ${data.page} de ${totalPages}`;
+        document.getElementById("prevBtn").disabled = currentPage <= 1;
+        document.getElementById("nextBtn").disabled = currentPage >= totalPages;
+      }
+
+      document.getElementById("filterBtn").addEventListener("click", () => {
+        currentPage = 1;
+        loadAudits();
+      });
+
+      document.getElementById("prevBtn").addEventListener("click", () => {
+        if (currentPage > 1) {
+          currentPage -= 1;
+          loadAudits();
+        }
+      });
+
+      document.getElementById("nextBtn").addEventListener("click", () => {
+        currentPage += 1;
+        loadAudits();
+      });
+
+      document.getElementById("exportBtn").addEventListener("click", async () => {
+        const reauth = confirm("Confirmar exportação? (pode exigir reautenticação)");
+        const response = await fetch(`/api/audit/export?${buildQuery()}`, {
+          headers: {
+            "X-Role": "ADMIN",
+            "X-User-Id": "admin",
+            "X-Reauth": reauth ? "true" : "false",
+          },
+        });
+        if (!response.ok) {
+          alert("Falha ao exportar. Verifique a reautenticação e permissões.");
+          return;
+        }
+        const blob = await response.blob();
+        const url = window.URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = "audit_export.csv";
+        link.click();
+        window.URL.revokeObjectURL(url);
+      });
+
+      loadAudits();
+    </script>
+  </body>
+</html>
