@@ -1,0 +1,30 @@
+{
+  "build": {
+    "beforeBuildCommand": "npm run build",
+    "beforeDevCommand": "npm run dev",
+    "devPath": "http://localhost:1420",
+    "distDir": "../dist"
+  },
+  "package": {
+    "productName": "LexCRM",
+    "version": "0.1.0"
+  },
+  "tauri": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "LexCRM",
+        "width": 1200,
+        "height": 800,
+        "resizable": true
+      }
+    ],
+    "security": {
+      "csp": null
+    },
+    "bundle": {
+      "active": false,
+      "identifier": "com.lexcrm.app"
+    }
+  }
+}
