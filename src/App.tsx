@@ -3,7 +3,7 @@ import { AuthProvider, Role, useAuth } from './state/auth';
 import LoginPage from './pages/Login';
 import AppHome from './pages/AppHome';
 import AppShell from './components/AppShell';
-import AdminPage from './pages/Admin';
+import AdminUsers from './pages/AdminUsers';
 
 const ADMIN_ROLES = new Set<Role>([Role.ADMIN, Role.PARTNER]);
 
@@ -31,19 +31,14 @@ const AppRoutes = () => {
       </Route>
       <Route
         path="/admin"
-        element={
-          session ? (
-            <AppShell />
-          ) : (
-            <Navigate to="/login" replace />
-          )
-        }
+        element={session ? <AppShell /> : <Navigate to="/login" replace />}
       >
+        <Route index element={<Navigate to="/admin/users" replace />} />
         <Route
-          index
+          path="users"
           element={
             <RequireAdmin>
-              <AdminPage />
+              <AdminUsers />
             </RequireAdmin>
           }
         />
