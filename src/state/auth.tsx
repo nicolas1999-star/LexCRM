@@ -1,10 +1,21 @@
 import React, { createContext, useCallback, useContext, useMemo, useState } from 'react';
 
+export enum Role {
+  ADMIN = 'ADMIN',
+  PARTNER = 'PARTNER',
+  COORDINATOR = 'COORDINATOR',
+  LAWYER_OWNER = 'LAWYER_OWNER',
+  LAWYER_ASSOC = 'LAWYER_ASSOC',
+  PARALEGAL = 'PARALEGAL',
+  FINANCE = 'FINANCE',
+  SALES = 'SALES'
+}
+
 export type User = {
   id: string;
   name: string;
   email: string;
-  role: string;
+  role: Role;
   status: string;
   lastLoginAt?: string | null;
 };
