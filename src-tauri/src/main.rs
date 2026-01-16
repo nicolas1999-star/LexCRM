@@ -106,6 +106,21 @@ struct UserDetail {
   last_login_at: Option<String>,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct Team {
+  id: String,
+  name: String,
+  description: Option<String>,
+  lead_user_id: Option<String>,
+  lead_name: Option<String>,
+  lead_email: Option<String>,
+  member_count: i64,
+  member_user_ids: Vec<String>,
+  created_at: String,
+  updated_at: String,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct CreateInitialAdminPayload {
@@ -144,6 +159,23 @@ struct UpdateUserPayload {
   name: String,
   email: String,
   role: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CreateTeamPayload {
+  name: String,
+  description: Option<String>,
+  lead_user_id: Option<String>,
+  member_user_ids: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct UpdateTeamPayload {
+  name: String,
+  description: Option<String>,
+  lead_user_id: Option<String>,
 }
 
 #[derive(Debug)]
@@ -227,6 +259,25 @@ fn run_migrations(conn: &Connection) -> AppResult<()> {
         value_json TEXT NOT NULL,
         updated_at TEXT NOT NULL,
         updated_by_user_id TEXT
+      );
+      ",
+    ),
+    (
+      "0002_teams",
+      "\
+      CREATE TABLE IF NOT EXISTS TEAMS(
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL UNIQUE,
+        description TEXT,
+        lead_user_id TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS TEAM_MEMBERS(
+        team_id TEXT NOT NULL,
+        user_id TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY(team_id, user_id)
       );
       ",
     ),
@@ -943,6 +994,376 @@ fn users_reset_password(
   Ok(())
 }
 
+#[tauri::command]
+fn teams_list(
+  app: AppHandle,
+  state: State<'_, AppState>,
+  session_id: String,
+) -> AppResult<Vec<Team>> {
+  let path = db_path(&app, &state)?;
+  let conn = open_connection(&path)?;
+  run_migrations(&conn)?;
+  require_admin_session(&conn, &session_id)?;
+
+  let mut stmt = conn.prepare(
+    "SELECT t.id, t.name, t.description, t.lead_user_id, u.name, u.email, t.created_at, t.updated_at
+     FROM TEAMS t
+     LEFT JOIN USERS u ON t.lead_user_id = u.id
+     ORDER BY t.name ASC",
+  )?;
+  let rows = stmt.query_map([], |row| {
+    Ok((
+      row.get::<_, String>(0)?,
+      row.get::<_, String>(1)?,
+      row.get::<_, Option<String>>(2)?,
+      row.get::<_, Option<String>>(3)?,
+      row.get::<_, Option<String>>(4)?,
+      row.get::<_, Option<String>>(5)?,
+      row.get::<_, String>(6)?,
+      row.get::<_, String>(7)?,
+    ))
+  })?;
+
+  let mut teams = Vec::new();
+  for row in rows {
+    let (id, name, description, lead_user_id, lead_name, lead_email, created_at, updated_at) =
+      row?;
+    let mut members_stmt =
+      conn.prepare("SELECT user_id FROM TEAM_MEMBERS WHERE team_id = ?1")?;
+    let member_rows = members_stmt.query_map(params![id.clone()], |member_row| {
+      member_row.get::<_, String>(0)
+    })?;
+    let mut member_user_ids = Vec::new();
+    for member_id in member_rows {
+      member_user_ids.push(member_id?);
+    }
+
+    let member_count = member_user_ids.len() as i64;
+    teams.push(Team {
+      id,
+      name,
+      description,
+      lead_user_id,
+      lead_name,
+      lead_email,
+      member_count,
+      member_user_ids,
+      created_at,
+      updated_at,
+    });
+  }
+
+  Ok(teams)
+}
+
+#[tauri::command]
+fn teams_create(
+  app: AppHandle,
+  state: State<'_, AppState>,
+  session_id: String,
+  payload: CreateTeamPayload,
+) -> AppResult<Team> {
+  let path = db_path(&app, &state)?;
+  let conn = open_connection(&path)?;
+  run_migrations(&conn)?;
+  let admin = require_admin_session(&conn, &session_id)?;
+
+  let created_at: String = conn
+    .query_row(
+      "SELECT created_at FROM TEAMS WHERE id = ?1",
+      params![id.clone()],
+      |row| row.get(0),
+    )
+    .map_err(|_| AppError::new("not_found", "Equipe não encontrada."))?;
+
+  let name = payload.name.trim().to_string();
+  if name.is_empty() {
+    return Err(AppError::new("validation_error", "Nome é obrigatório."));
+  }
+  let description = payload.description.map(|value| value.trim().to_string());
+  let lead_user_id = payload.lead_user_id.filter(|value| !value.trim().is_empty());
+
+  let exists: Option<String> = conn
+    .query_row("SELECT id FROM TEAMS WHERE name = ?1", params![name], |row| {
+      row.get(0)
+    })
+    .optional()?;
+  if exists.is_some() {
+    return Err(AppError::new("name_in_use", "Nome de equipe já existe."));
+  }
+
+  let team_id = Uuid::new_v4().to_string();
+  let now = now_iso();
+
+  conn.execute(
+    "INSERT INTO TEAMS (id, name, description, lead_user_id, created_at, updated_at)
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+    params![
+      team_id,
+      name,
+      description.clone(),
+      lead_user_id.clone(),
+      now,
+      now
+    ],
+  )?;
+
+  let mut member_user_ids = payload.member_user_ids;
+  member_user_ids.sort();
+  member_user_ids.dedup();
+  for user_id in &member_user_ids {
+    conn.execute(
+      "INSERT INTO TEAM_MEMBERS (team_id, user_id, created_at) VALUES (?1, ?2, ?3)",
+      params![team_id, user_id, now],
+    )?;
+  }
+
+  insert_audit_log(
+    &conn,
+    &admin.id,
+    "create_team",
+    Some("TEAM"),
+    Some(&team_id),
+    Some("Equipe criada"),
+    None,
+  )?;
+
+  Ok(Team {
+    id: team_id,
+    name,
+    description,
+    lead_user_id: lead_user_id.clone(),
+    lead_name: None,
+    lead_email: None,
+    member_count: member_user_ids.len() as i64,
+    member_user_ids,
+    created_at: now.clone(),
+    updated_at: now,
+  })
+}
+
+#[tauri::command]
+fn teams_update(
+  app: AppHandle,
+  state: State<'_, AppState>,
+  session_id: String,
+  id: String,
+  payload: UpdateTeamPayload,
+) -> AppResult<Team> {
+  let path = db_path(&app, &state)?;
+  let conn = open_connection(&path)?;
+  run_migrations(&conn)?;
+  let admin = require_admin_session(&conn, &session_id)?;
+
+  let created_at: String = conn
+    .query_row(
+      "SELECT created_at FROM TEAMS WHERE id = ?1",
+      params![id.clone()],
+      |row| row.get(0),
+    )
+    .map_err(|_| AppError::new("not_found", "Equipe não encontrada."))?;
+
+  let name = payload.name.trim().to_string();
+  if name.is_empty() {
+    return Err(AppError::new("validation_error", "Nome é obrigatório."));
+  }
+  let description = payload.description.map(|value| value.trim().to_string());
+  let lead_user_id = payload.lead_user_id.filter(|value| !value.trim().is_empty());
+
+  let exists: Option<String> = conn
+    .query_row(
+      "SELECT id FROM TEAMS WHERE name = ?1 AND id <> ?2",
+      params![name, id.clone()],
+      |row| row.get(0),
+    )
+    .optional()?;
+  if exists.is_some() {
+    return Err(AppError::new("name_in_use", "Nome de equipe já existe."));
+  }
+
+  let now = now_iso();
+  let affected = conn.execute(
+    "UPDATE TEAMS SET name = ?1, description = ?2, lead_user_id = ?3, updated_at = ?4 WHERE id = ?5",
+    params![name, description.clone(), lead_user_id.clone(), now, id.clone()],
+  )?;
+  if affected == 0 {
+    return Err(AppError::new("not_found", "Equipe não encontrada."));
+  }
+
+  insert_audit_log(
+    &conn,
+    &admin.id,
+    "update_team",
+    Some("TEAM"),
+    Some(&id),
+    Some("Equipe atualizada"),
+    None,
+  )?;
+
+  let mut members_stmt =
+    conn.prepare("SELECT user_id FROM TEAM_MEMBERS WHERE team_id = ?1")?;
+  let member_rows = members_stmt.query_map(params![id.clone()], |row| row.get::<_, String>(0))?;
+  let mut member_user_ids = Vec::new();
+  for member_id in member_rows {
+    member_user_ids.push(member_id?);
+  }
+
+  Ok(Team {
+    id,
+    name,
+    description,
+    lead_user_id,
+    lead_name: None,
+    lead_email: None,
+    member_count: member_user_ids.len() as i64,
+    member_user_ids,
+    created_at,
+    updated_at: now,
+  })
+}
+
+#[tauri::command]
+fn teams_set_members(
+  app: AppHandle,
+  state: State<'_, AppState>,
+  session_id: String,
+  team_id: String,
+  user_ids: Vec<String>,
+) -> AppResult<Team> {
+  let path = db_path(&app, &state)?;
+  let conn = open_connection(&path)?;
+  run_migrations(&conn)?;
+  let admin = require_admin_session(&conn, &session_id)?;
+
+  let exists: Option<String> = conn
+    .query_row(
+      "SELECT id FROM TEAMS WHERE id = ?1",
+      params![team_id.clone()],
+      |row| row.get(0),
+    )
+    .optional()?;
+  if exists.is_none() {
+    return Err(AppError::new("not_found", "Equipe não encontrada."));
+  }
+
+  let now = now_iso();
+  conn.execute(
+    "DELETE FROM TEAM_MEMBERS WHERE team_id = ?1",
+    params![team_id.clone()],
+  )?;
+
+  let mut member_user_ids = user_ids;
+  member_user_ids.sort();
+  member_user_ids.dedup();
+  for user_id in &member_user_ids {
+    conn.execute(
+      "INSERT INTO TEAM_MEMBERS (team_id, user_id, created_at) VALUES (?1, ?2, ?3)",
+      params![team_id, user_id, now],
+    )?;
+  }
+
+  conn.execute(
+    "UPDATE TEAMS SET updated_at = ?1 WHERE id = ?2",
+    params![now, team_id.clone()],
+  )?;
+
+  insert_audit_log(
+    &conn,
+    &admin.id,
+    "update_team_members",
+    Some("TEAM"),
+    Some(&team_id),
+    Some("Membros atualizados"),
+    None,
+  )?;
+
+  let mut team_stmt = conn.prepare(
+    "SELECT name, description, lead_user_id, created_at, updated_at FROM TEAMS WHERE id = ?1",
+  )?;
+  let team_row = team_stmt.query_row(params![team_id.clone()], |row| {
+    Ok((
+      row.get::<_, String>(0)?,
+      row.get::<_, Option<String>>(1)?,
+      row.get::<_, Option<String>>(2)?,
+      row.get::<_, String>(3)?,
+      row.get::<_, String>(4)?,
+    ))
+  })?;
+
+  Ok(Team {
+    id: team_id,
+    name: team_row.0,
+    description: team_row.1,
+    lead_user_id: team_row.2,
+    lead_name: None,
+    lead_email: None,
+    member_count: member_user_ids.len() as i64,
+    member_user_ids,
+    created_at: team_row.3,
+    updated_at: team_row.4,
+  })
+}
+
+#[tauri::command]
+fn teams_delete_or_archive(
+  app: AppHandle,
+  state: State<'_, AppState>,
+  session_id: String,
+  id: String,
+) -> AppResult<()> {
+  let path = db_path(&app, &state)?;
+  let conn = open_connection(&path)?;
+  run_migrations(&conn)?;
+  let admin = require_admin_session(&conn, &session_id)?;
+
+  let exists: Option<String> = conn
+    .query_row("SELECT id FROM TEAMS WHERE id = ?1", params![id.clone()], |row| {
+      row.get(0)
+    })
+    .optional()?;
+  if exists.is_none() {
+    return Err(AppError::new("not_found", "Equipe não encontrada."));
+  }
+
+  let members_count: i64 = conn.query_row(
+    "SELECT COUNT(*) FROM TEAM_MEMBERS WHERE team_id = ?1",
+    params![id.clone()],
+    |row| row.get(0),
+  )?;
+  if members_count > 0 {
+    insert_audit_log(
+      &conn,
+      &admin.id,
+      "delete_attempt",
+      Some("TEAM"),
+      Some(&id),
+      Some("Tentativa de exclusão bloqueada (equipe com membros)"),
+      None,
+    )?;
+    return Err(AppError::new(
+      "team_has_members",
+      "Não é possível excluir equipes com membros.",
+    ));
+  }
+
+  insert_audit_log(
+    &conn,
+    &admin.id,
+    "delete_attempt",
+    Some("TEAM"),
+    Some(&id),
+    Some("Equipe removida"),
+    None,
+  )?;
+
+  conn.execute(
+    "DELETE FROM TEAM_MEMBERS WHERE team_id = ?1",
+    params![id.clone()],
+  )?;
+  conn.execute("DELETE FROM TEAMS WHERE id = ?1", params![id])?;
+  Ok(())
+}
+
 fn main() {
   tauri::Builder::default()
     .manage(AppState::default())
@@ -964,7 +1385,12 @@ fn main() {
       users_create,
       users_update,
       users_set_status,
-      users_reset_password
+      users_reset_password,
+      teams_list,
+      teams_create,
+      teams_update,
+      teams_set_members,
+      teams_delete_or_archive
     ])
     .run(tauri::generate_context!())
     .expect("error while running tauri application");

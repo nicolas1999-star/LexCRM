@@ -10,6 +10,7 @@ Aplicação desktop offline construída com **Tauri + React + TypeScript (Vite)*
 - Auditoria para login/logout/criação de admin.
 - RBAC mínimo com administração restrita a ADMIN e PARTNER.
 - Módulo de usuários em `/admin/users` com CRUD básico e reset de senha.
+- Módulo de equipes em `/admin/teams` com membros e responsável.
 
 ## 🧰 Pré-requisitos
 - Node.js 18+
@@ -40,6 +41,9 @@ npm run tauri build
 ## 👥 Módulo de usuários
 - Acesse `/admin/users` para gerenciar usuários.
 - Reset de senha exige reautenticação (confirmação da senha do usuário logado).
+
+## 👥 Módulo de equipes
+- Acesse `/admin/teams` para gerenciar equipes e membros.
 
 ## 💾 Banco de dados
 O SQLite é criado automaticamente em:
