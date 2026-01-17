@@ -39,12 +39,12 @@ export const authLogin = async (payload: LoginPayload): Promise<AuthResponse> =>
 };
 
 export const authLogout = async (sessionId: string): Promise<void> => {
-  return invoke('auth_logout', { session_id: sessionId });
+  return invoke('auth_logout', { sessionId });
 };
 
 export const authReauthCheck = async (
   sessionId: string,
   password: string
 ): Promise<void> => {
-  return invoke('auth_reauth_check', { session_id: sessionId, password });
+  return invoke('auth_reauth_check', { sessionId, password });
 };

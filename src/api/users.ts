@@ -40,7 +40,7 @@ export const usersList = async (
   filters: UsersListFilters
 ): Promise<UserSummary[]> => {
   return invoke('users_list', {
-    session_id: sessionId,
+    sessionId,
     filters: {
       q: filters.q?.trim() || undefined,
       role: filters.role || undefined,
@@ -50,7 +50,7 @@ export const usersList = async (
 };
 
 export const usersGet = async (sessionId: string, id: string): Promise<UserDetail> => {
-  return invoke('users_get', { session_id: sessionId, id });
+  return invoke('users_get', { sessionId, id });
 };
 
 export const usersCreate = async (
@@ -58,7 +58,7 @@ export const usersCreate = async (
   payload: CreateUserPayload
 ): Promise<UserDetail> => {
   return invoke('users_create', {
-    session_id: sessionId,
+    sessionId,
     payload: {
       name: payload.name,
       email: payload.email,
@@ -74,7 +74,7 @@ export const usersUpdate = async (
   payload: UpdateUserPayload
 ): Promise<UserDetail> => {
   return invoke('users_update', {
-    session_id: sessionId,
+    sessionId,
     id,
     payload: {
       name: payload.name,
@@ -89,7 +89,7 @@ export const usersSetStatus = async (
   id: string,
   status: UserStatus
 ): Promise<UserDetail> => {
-  return invoke('users_set_status', { session_id: sessionId, id, status });
+  return invoke('users_set_status', { sessionId, id, status });
 };
 
 export const usersResetPassword = async (
@@ -98,8 +98,8 @@ export const usersResetPassword = async (
   newPassword: string
 ): Promise<void> => {
   return invoke('users_reset_password', {
-    session_id: sessionId,
+    sessionId,
     id,
-    new_password: newPassword
+    newPassword
   });
 };
