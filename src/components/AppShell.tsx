@@ -12,7 +12,8 @@ import {
   Alert
 } from '@mui/material';
 import { NavLink, Outlet, useNavigate } from 'react-router-dom';
-import { authLogout, type AppError } from '../api/auth';
+import { authLogout } from '../api/auth';
+import { getErrorMessage } from '../api/errors';
 import { Role, useAuth } from '../state/auth';
 
 const drawerWidth = 240;
@@ -31,7 +32,7 @@ const AppShell = () => {
         await authLogout(sessionId);
       }
     } catch (err) {
-      logoutError = (err as AppError)?.message ?? 'Falha ao sair.';
+      logoutError = getErrorMessage(err, 'Falha ao sair.');
       setError(logoutError);
     } finally {
       clearSession();

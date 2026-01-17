@@ -11,12 +11,8 @@ import {
   Typography
 } from '@mui/material';
 import { useLocation, useNavigate } from 'react-router-dom';
-import {
-  authCreateInitialAdmin,
-  authGetBootstrapStatus,
-  authLogin,
-  type AppError
-} from '../api/auth';
+import { authCreateInitialAdmin, authGetBootstrapStatus, authLogin } from '../api/auth';
+import { getErrorMessage } from '../api/errors';
 import { useAuth } from '../state/auth';
 
 const LoginPage = () => {
@@ -41,8 +37,7 @@ const LoginPage = () => {
         const status = await authGetBootstrapStatus();
         setIsBootstrap(!status.hasAnyUser);
       } catch (err) {
-        const message = (err as AppError)?.message ?? 'Falha ao carregar status.';
-        setError(message);
+        setError(getErrorMessage(err, 'Falha ao carregar status.'));
       } finally {
         setIsLoading(false);
       }
@@ -75,8 +70,7 @@ const LoginPage = () => {
         navigate('/app');
       }
     } catch (err) {
-      const message = (err as AppError)?.message ?? 'Não foi possível autenticar.';
-      setError(message);
+      setError(getErrorMessage(err, 'Não foi possível autenticar.'));
     }
   };
 
