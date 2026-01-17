@@ -32,6 +32,7 @@ import {
   type UserStatus
 } from '../api/users';
 import { authReauthCheck, type AppError } from '../api/auth';
+import { getRoleLabel } from '../constants/roles';
 
 const roleOptions = Object.values(Role);
 const statusOptions: UserStatus[] = ['ACTIVE', 'INACTIVE', 'SUSPENDED'];
@@ -202,10 +203,10 @@ const AdminUsers = () => {
             fullWidth
           />
           <FormControl fullWidth>
-            <InputLabel>Role</InputLabel>
+            <InputLabel>Papel</InputLabel>
             <Select
               value={filters.role}
-              label="Role"
+              label="Papel"
               onChange={(event) =>
                 setFilters((prev) => ({ ...prev, role: event.target.value }))
               }
@@ -213,7 +214,7 @@ const AdminUsers = () => {
               <MenuItem value="">Todas</MenuItem>
               {roleOptions.map((role) => (
                 <MenuItem key={role} value={role}>
-                  {role}
+                  {getRoleLabel(role)}
                 </MenuItem>
               ))}
             </Select>
@@ -244,7 +245,7 @@ const AdminUsers = () => {
             <TableRow>
               <TableCell>Nome</TableCell>
               <TableCell>Email</TableCell>
-              <TableCell>Role</TableCell>
+              <TableCell>Papel</TableCell>
               <TableCell>Status</TableCell>
               <TableCell align="right">Ações</TableCell>
             </TableRow>
@@ -254,7 +255,7 @@ const AdminUsers = () => {
               <TableRow key={user.id} hover>
                 <TableCell>{user.name}</TableCell>
                 <TableCell>{user.email}</TableCell>
-                <TableCell>{user.role}</TableCell>
+                <TableCell>{getRoleLabel(user.role)}</TableCell>
                 <TableCell>{user.status}</TableCell>
                 <TableCell align="right">
                   <Stack direction="row" spacing={1} justifyContent="flex-end">
@@ -314,17 +315,17 @@ const AdminUsers = () => {
               fullWidth
             />
             <FormControl fullWidth>
-              <InputLabel>Role</InputLabel>
+              <InputLabel>Papel</InputLabel>
               <Select
                 value={userForm.role}
-                label="Role"
+                label="Papel"
                 onChange={(event) =>
                   setUserForm((prev) => ({ ...prev, role: event.target.value as Role }))
                 }
               >
                 {roleOptions.map((role) => (
                   <MenuItem key={role} value={role}>
-                    {role}
+                    {getRoleLabel(role)}
                   </MenuItem>
                 ))}
               </Select>
