@@ -160,6 +160,32 @@ struct ClientDetail {
   updated_at: String,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AttendanceSummary {
+  id: String,
+  client_id: String,
+  occurred_at: String,
+  channel: String,
+  subject: String,
+  notes: String,
+  created_at: String,
+  updated_at: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AttendanceDetail {
+  id: String,
+  client_id: String,
+  occurred_at: String,
+  channel: String,
+  subject: String,
+  notes: String,
+  created_at: String,
+  updated_at: String,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct CreateInitialAdminPayload {
@@ -248,6 +274,24 @@ struct UpdateClientPayload {
   email: Option<String>,
   phone: Option<String>,
   notes: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CreateAttendancePayload {
+  occurred_at: String,
+  channel: String,
+  subject: String,
+  notes: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct UpdateAttendancePayload {
+  occurred_at: String,
+  channel: String,
+  subject: String,
+  notes: String,
 }
 
 #[derive(Debug)]
@@ -367,6 +411,22 @@ fn run_migrations(conn: &Connection) -> AppResult<()> {
         status TEXT NOT NULL,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
+      );
+      ",
+    ),
+    (
+      "0004_attendances",
+      "\
+      CREATE TABLE IF NOT EXISTS ATTENDANCES(
+        id TEXT PRIMARY KEY,
+        client_id TEXT NOT NULL,
+        occurred_at TEXT NOT NULL,
+        channel TEXT NOT NULL,
+        subject TEXT NOT NULL,
+        notes TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY (client_id) REFERENCES CLIENTS(id)
       );
       ",
     ),
@@ -1546,6 +1606,59 @@ fn validate_client_payload(client_type: &str, name: &str, cpf_cnpj: &str) -> App
   Ok(())
 }
 
+fn ensure_client_exists(conn: &Connection, client_id: &str) -> AppResult<()> {
+  let exists: Option<String> = conn
+    .query_row(
+      "SELECT id FROM CLIENTS WHERE id = ?1",
+      params![client_id],
+      |row| row.get(0),
+    )
+    .optional()?;
+  if exists.is_none() {
+    return Err(AppError::new("not_found", "Cliente não encontrado."));
+  }
+  Ok(())
+}
+
+fn normalize_attendance_channel(channel: &str) -> String {
+  channel.trim().to_uppercase()
+}
+
+fn validate_attendance_payload(
+  occurred_at: &str,
+  channel: &str,
+  subject: &str,
+  notes: &str,
+) -> AppResult<()> {
+  if occurred_at.trim().is_empty() {
+    return Err(AppError::new(
+      "validation_error",
+      "Data/hora é obrigatória.",
+    ));
+  }
+  let normalized_channel = normalize_attendance_channel(channel);
+  let allowed = [
+    "PRESENCIAL",
+    "WHATSAPP",
+    "TELEFONE",
+    "EMAIL",
+    "VIDEO",
+  ];
+  if !allowed.contains(&normalized_channel.as_str()) {
+    return Err(AppError::new(
+      "validation_error",
+      "Canal de atendimento inválido.",
+    ));
+  }
+  if subject.trim().is_empty() {
+    return Err(AppError::new("validation_error", "Assunto é obrigatório."));
+  }
+  if notes.trim().is_empty() {
+    return Err(AppError::new("validation_error", "Notas são obrigatórias."));
+  }
+  Ok(())
+}
+
 #[tauri::command]
 fn clients_list(
   app: AppHandle,
@@ -1859,6 +1972,201 @@ fn clients_archive(
   Ok(())
 }
 
+#[tauri::command]
+fn attendances_list(
+  app: AppHandle,
+  state: State<'_, AppState>,
+  session_id: String,
+  client_id: String,
+) -> AppResult<Vec<AttendanceSummary>> {
+  let path = db_path(&app, &state)?;
+  let conn = open_connection(&path)?;
+  run_migrations(&conn)?;
+  require_admin_session(&conn, &session_id)?;
+  ensure_client_exists(&conn, &client_id)?;
+
+  let mut stmt = conn.prepare(
+    "SELECT id, client_id, occurred_at, channel, subject, notes, created_at, updated_at
+     FROM ATTENDANCES WHERE client_id = ?1 ORDER BY occurred_at DESC",
+  )?;
+  let rows = stmt.query_map(params![client_id], |row| {
+    Ok(AttendanceSummary {
+      id: row.get(0)?,
+      client_id: row.get(1)?,
+      occurred_at: row.get(2)?,
+      channel: row.get(3)?,
+      subject: row.get(4)?,
+      notes: row.get(5)?,
+      created_at: row.get(6)?,
+      updated_at: row.get(7)?,
+    })
+  })?;
+
+  let mut attendances = Vec::new();
+  for row in rows {
+    attendances.push(row?);
+  }
+  Ok(attendances)
+}
+
+#[tauri::command]
+fn attendances_create(
+  app: AppHandle,
+  state: State<'_, AppState>,
+  session_id: String,
+  client_id: String,
+  payload: CreateAttendancePayload,
+) -> AppResult<AttendanceDetail> {
+  let path = db_path(&app, &state)?;
+  let conn = open_connection(&path)?;
+  run_migrations(&conn)?;
+  let admin = require_admin_session(&conn, &session_id)?;
+  ensure_client_exists(&conn, &client_id)?;
+
+  let occurred_at = payload.occurred_at.trim().to_string();
+  let channel = normalize_attendance_channel(&payload.channel);
+  let subject = payload.subject.trim().to_string();
+  let notes = payload.notes.trim().to_string();
+  validate_attendance_payload(&occurred_at, &channel, &subject, &notes)?;
+
+  let attendance_id = Uuid::new_v4().to_string();
+  let now = now_iso();
+
+  conn.execute(
+    "INSERT INTO ATTENDANCES (id, client_id, occurred_at, channel, subject, notes, created_at, updated_at)
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+    params![
+      attendance_id,
+      client_id,
+      occurred_at,
+      channel,
+      subject,
+      notes,
+      now,
+      now
+    ],
+  )?;
+
+  insert_audit_log(
+    &conn,
+    &admin.id,
+    "create_attendance",
+    Some("ATTENDANCE"),
+    Some(&attendance_id),
+    Some("Atendimento criado"),
+    None,
+  )?;
+
+  Ok(AttendanceDetail {
+    id: attendance_id,
+    client_id,
+    occurred_at,
+    channel,
+    subject,
+    notes,
+    created_at: now.clone(),
+    updated_at: now,
+  })
+}
+
+#[tauri::command]
+fn attendances_update(
+  app: AppHandle,
+  state: State<'_, AppState>,
+  session_id: String,
+  id: String,
+  payload: UpdateAttendancePayload,
+) -> AppResult<AttendanceDetail> {
+  let path = db_path(&app, &state)?;
+  let conn = open_connection(&path)?;
+  run_migrations(&conn)?;
+  let admin = require_admin_session(&conn, &session_id)?;
+
+  let existing: Option<(String, String)> = conn
+    .query_row(
+      "SELECT client_id, created_at FROM ATTENDANCES WHERE id = ?1",
+      params![id.clone()],
+      |row| Ok((row.get(0)?, row.get(1)?)),
+    )
+    .optional()?;
+  let (client_id, created_at) = match existing {
+    Some(values) => values,
+    None => return Err(AppError::new("not_found", "Atendimento não encontrado.")),
+  };
+
+  let occurred_at = payload.occurred_at.trim().to_string();
+  let channel = normalize_attendance_channel(&payload.channel);
+  let subject = payload.subject.trim().to_string();
+  let notes = payload.notes.trim().to_string();
+  validate_attendance_payload(&occurred_at, &channel, &subject, &notes)?;
+
+  let now = now_iso();
+  conn.execute(
+    "UPDATE ATTENDANCES SET occurred_at = ?1, channel = ?2, subject = ?3, notes = ?4, updated_at = ?5
+     WHERE id = ?6",
+    params![occurred_at, channel, subject, notes, now, id.clone()],
+  )?;
+
+  insert_audit_log(
+    &conn,
+    &admin.id,
+    "update_attendance",
+    Some("ATTENDANCE"),
+    Some(&id),
+    Some("Atendimento atualizado"),
+    None,
+  )?;
+
+  Ok(AttendanceDetail {
+    id,
+    client_id,
+    occurred_at,
+    channel,
+    subject,
+    notes,
+    created_at,
+    updated_at: now,
+  })
+}
+
+#[tauri::command]
+fn attendances_delete(
+  app: AppHandle,
+  state: State<'_, AppState>,
+  session_id: String,
+  id: String,
+) -> AppResult<()> {
+  let path = db_path(&app, &state)?;
+  let conn = open_connection(&path)?;
+  run_migrations(&conn)?;
+  let admin = require_admin_session(&conn, &session_id)?;
+
+  let existing: Option<String> = conn
+    .query_row(
+      "SELECT id FROM ATTENDANCES WHERE id = ?1",
+      params![id.clone()],
+      |row| row.get(0),
+    )
+    .optional()?;
+  if existing.is_none() {
+    return Err(AppError::new("not_found", "Atendimento não encontrado."));
+  }
+
+  conn.execute("DELETE FROM ATTENDANCES WHERE id = ?1", params![id.clone()])?;
+
+  insert_audit_log(
+    &conn,
+    &admin.id,
+    "delete_attendance",
+    Some("ATTENDANCE"),
+    Some(&id),
+    Some("Atendimento removido"),
+    None,
+  )?;
+
+  Ok(())
+}
+
 fn main() {
   tauri::Builder::default()
     .manage(AppState::default())
@@ -1891,7 +2199,11 @@ fn main() {
       clients_get,
       clients_create,
       clients_update,
-      clients_archive
+      clients_archive,
+      attendances_list,
+      attendances_create,
+      attendances_update,
+      attendances_delete
     ])
     .run(tauri::generate_context!())
     .expect("error while running tauri application");
