@@ -25,19 +25,20 @@ const AppShell = () => {
   const [error, setError] = useState<string | null>(null);
 
   const handleLogout = async () => {
-    if (!sessionId) {
-      clearSession();
-      navigate('/login');
-      return;
-    }
-
+    let logoutError: string | null = null;
     try {
-      await authLogout(sessionId);
-      clearSession();
-      navigate('/login');
+      if (sessionId) {
+        await authLogout(sessionId);
+      }
     } catch (err) {
-      const message = (err as AppError)?.message ?? 'Falha ao sair.';
-      setError(message);
+      logoutError = (err as AppError)?.message ?? 'Falha ao sair.';
+      setError(logoutError);
+    } finally {
+      clearSession();
+      navigate('/login', {
+        replace: true,
+        state: logoutError ? { logoutError } : undefined
+      });
     }
   };
 
