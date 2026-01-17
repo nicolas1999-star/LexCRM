@@ -131,6 +131,35 @@ struct Team {
   updated_at: String,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ClientSummary {
+  id: String,
+  #[serde(rename = "type")]
+  client_type: String,
+  name: String,
+  cpf_cnpj: String,
+  status: String,
+  created_at: String,
+  updated_at: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ClientDetail {
+  id: String,
+  #[serde(rename = "type")]
+  client_type: String,
+  name: String,
+  cpf_cnpj: String,
+  email: Option<String>,
+  phone: Option<String>,
+  notes: Option<String>,
+  status: String,
+  created_at: String,
+  updated_at: String,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct CreateInitialAdminPayload {
@@ -186,6 +215,39 @@ struct UpdateTeamPayload {
   name: String,
   description: Option<String>,
   lead_user_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ClientsListFilters {
+  q: Option<String>,
+  #[serde(rename = "type")]
+  client_type: Option<String>,
+  status: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CreateClientPayload {
+  #[serde(rename = "type")]
+  client_type: String,
+  name: String,
+  cpf_cnpj: String,
+  email: Option<String>,
+  phone: Option<String>,
+  notes: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct UpdateClientPayload {
+  #[serde(rename = "type")]
+  client_type: String,
+  name: String,
+  cpf_cnpj: String,
+  email: Option<String>,
+  phone: Option<String>,
+  notes: Option<String>,
 }
 
 #[derive(Debug)]
@@ -291,6 +353,23 @@ fn run_migrations(conn: &Connection) -> AppResult<()> {
       );
       ",
     ),
+    (
+      "0003_clients",
+      "\
+      CREATE TABLE IF NOT EXISTS CLIENTS(
+        id TEXT PRIMARY KEY,
+        type TEXT NOT NULL,
+        name TEXT NOT NULL,
+        cpf_cnpj TEXT NOT NULL UNIQUE,
+        email TEXT,
+        phone TEXT,
+        notes TEXT,
+        status TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      ",
+    ),
   ];
 
   for (id, sql) in migrations {
@@ -326,6 +405,74 @@ fn verify_password(password: &str, hash: &str) -> AppResult<bool> {
   Ok(Argon2::default()
     .verify_password(password.as_bytes(), &parsed_hash)
     .is_ok())
+}
+
+fn only_digits(value: &str) -> String {
+  value.chars().filter(|c| c.is_ascii_digit()).collect()
+}
+
+fn is_valid_cpf(value: &str) -> bool {
+  if value.len() != 11 {
+    return false;
+  }
+  if value.chars().all(|c| c == value.chars().next().unwrap_or(' ')) {
+    return false;
+  }
+  let digits: Vec<u32> = value.chars().filter_map(|c| c.to_digit(10)).collect();
+  if digits.len() != 11 {
+    return false;
+  }
+  let mut sum = 0;
+  for i in 0..9 {
+    sum += digits[i] * (10 - i as u32);
+  }
+  let mut first = (sum * 10) % 11;
+  if first == 10 {
+    first = 0;
+  }
+  if digits[9] != first {
+    return false;
+  }
+  sum = 0;
+  for i in 0..10 {
+    sum += digits[i] * (11 - i as u32);
+  }
+  let mut second = (sum * 10) % 11;
+  if second == 10 {
+    second = 0;
+  }
+  digits[10] == second
+}
+
+fn is_valid_cnpj(value: &str) -> bool {
+  if value.len() != 14 {
+    return false;
+  }
+  if value.chars().all(|c| c == value.chars().next().unwrap_or(' ')) {
+    return false;
+  }
+  let digits: Vec<u32> = value.chars().filter_map(|c| c.to_digit(10)).collect();
+  if digits.len() != 14 {
+    return false;
+  }
+  let weights_first = [5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2];
+  let weights_second = [6, 5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2];
+  let mut sum = 0;
+  for i in 0..12 {
+    sum += digits[i] * weights_first[i];
+  }
+  let mut remainder = sum % 11;
+  let first = if remainder < 2 { 0 } else { 11 - remainder };
+  if digits[12] != first {
+    return false;
+  }
+  sum = 0;
+  for i in 0..13 {
+    sum += digits[i] * weights_second[i];
+  }
+  remainder = sum % 11;
+  let second = if remainder < 2 { 0 } else { 11 - remainder };
+  digits[13] == second
 }
 
 fn require_active_session(conn: &Connection, session_id: &str) -> AppResult<SessionRow> {
@@ -1367,6 +1514,351 @@ fn teams_delete_or_archive(
   Ok(())
 }
 
+fn normalize_client_type(value: &str) -> String {
+  value.trim().to_uppercase()
+}
+
+fn normalize_optional_field(value: Option<String>) -> Option<String> {
+  value
+    .map(|field| field.trim().to_string())
+    .filter(|field| !field.is_empty())
+}
+
+fn validate_client_payload(client_type: &str, name: &str, cpf_cnpj: &str) -> AppResult<()> {
+  if client_type.is_empty() {
+    return Err(AppError::new("validation_error", "Tipo é obrigatório."));
+  }
+  if client_type != "PF" && client_type != "PJ" {
+    return Err(AppError::new("validation_error", "Tipo inválido."));
+  }
+  if name.is_empty() {
+    return Err(AppError::new("validation_error", "Nome é obrigatório."));
+  }
+  if cpf_cnpj.is_empty() {
+    return Err(AppError::new("validation_error", "CPF/CNPJ é obrigatório."));
+  }
+  if client_type == "PF" && !is_valid_cpf(cpf_cnpj) {
+    return Err(AppError::new("validation_error", "CPF inválido."));
+  }
+  if client_type == "PJ" && !is_valid_cnpj(cpf_cnpj) {
+    return Err(AppError::new("validation_error", "CNPJ inválido."));
+  }
+  Ok(())
+}
+
+#[tauri::command]
+fn clients_list(
+  app: AppHandle,
+  state: State<'_, AppState>,
+  session_id: String,
+  filters: ClientsListFilters,
+) -> AppResult<Vec<ClientSummary>> {
+  let path = db_path(&app, &state)?;
+  let conn = open_connection(&path)?;
+  run_migrations(&conn)?;
+  require_admin_session(&conn, &session_id)?;
+
+  let mut sql = String::from(
+    "SELECT id, type, name, cpf_cnpj, status, created_at, updated_at FROM CLIENTS WHERE 1=1",
+  );
+  let mut params: Vec<String> = Vec::new();
+
+  if let Some(q) = filters.q {
+    let trimmed = q.trim();
+    if !trimmed.is_empty() {
+      let name_needle = format!("%{}%", trimmed);
+      let digits = only_digits(trimmed);
+      let cpf_needle = format!("%{}%", if digits.is_empty() { trimmed } else { digits.as_str() });
+      sql.push_str(" AND (name LIKE ? OR cpf_cnpj LIKE ?)");
+      params.push(name_needle);
+      params.push(cpf_needle);
+    }
+  }
+
+  if let Some(client_type) = filters.client_type {
+    let normalized = normalize_client_type(&client_type);
+    if !normalized.is_empty() {
+      sql.push_str(" AND type = ?");
+      params.push(normalized);
+    }
+  }
+
+  if let Some(status) = filters.status {
+    let normalized = status.trim().to_uppercase();
+    if !normalized.is_empty() {
+      sql.push_str(" AND status = ?");
+      params.push(normalized);
+    }
+  }
+
+  sql.push_str(" ORDER BY name ASC");
+
+  let mut stmt = conn.prepare(&sql)?;
+  let rows = stmt.query_map(params_from_iter(params.iter()), |row| {
+    Ok(ClientSummary {
+      id: row.get(0)?,
+      client_type: row.get(1)?,
+      name: row.get(2)?,
+      cpf_cnpj: row.get(3)?,
+      status: row.get(4)?,
+      created_at: row.get(5)?,
+      updated_at: row.get(6)?,
+    })
+  })?;
+
+  let mut clients = Vec::new();
+  for row in rows {
+    clients.push(row?);
+  }
+  Ok(clients)
+}
+
+#[tauri::command]
+fn clients_get(
+  app: AppHandle,
+  state: State<'_, AppState>,
+  session_id: String,
+  id: String,
+) -> AppResult<ClientDetail> {
+  let path = db_path(&app, &state)?;
+  let conn = open_connection(&path)?;
+  run_migrations(&conn)?;
+  require_admin_session(&conn, &session_id)?;
+
+  let mut stmt = conn.prepare(
+    "SELECT id, type, name, cpf_cnpj, email, phone, notes, status, created_at, updated_at
+     FROM CLIENTS WHERE id = ?1",
+  )?;
+  let client = stmt.query_row(params![id], |row| {
+    Ok(ClientDetail {
+      id: row.get(0)?,
+      client_type: row.get(1)?,
+      name: row.get(2)?,
+      cpf_cnpj: row.get(3)?,
+      email: row.get(4)?,
+      phone: row.get(5)?,
+      notes: row.get(6)?,
+      status: row.get(7)?,
+      created_at: row.get(8)?,
+      updated_at: row.get(9)?,
+    })
+  });
+
+  match client {
+    Ok(client) => Ok(client),
+    Err(rusqlite::Error::QueryReturnedNoRows) => {
+      Err(AppError::new("not_found", "Cliente não encontrado."))
+    }
+    Err(err) => Err(err.into()),
+  }
+}
+
+#[tauri::command]
+fn clients_create(
+  app: AppHandle,
+  state: State<'_, AppState>,
+  session_id: String,
+  payload: CreateClientPayload,
+) -> AppResult<ClientDetail> {
+  let path = db_path(&app, &state)?;
+  let conn = open_connection(&path)?;
+  run_migrations(&conn)?;
+  let admin = require_admin_session(&conn, &session_id)?;
+
+  let client_type = normalize_client_type(&payload.client_type);
+  let name = payload.name.trim().to_string();
+  let cpf_cnpj = only_digits(&payload.cpf_cnpj);
+  validate_client_payload(&client_type, &name, &cpf_cnpj)?;
+  let email = normalize_optional_field(payload.email);
+  let phone = normalize_optional_field(payload.phone);
+  let notes = normalize_optional_field(payload.notes);
+
+  let exists: Option<String> = conn
+    .query_row(
+      "SELECT id FROM CLIENTS WHERE cpf_cnpj = ?1",
+      params![cpf_cnpj],
+      |row| row.get(0),
+    )
+    .optional()?;
+  if exists.is_some() {
+    return Err(AppError::new(
+      "cpf_cnpj_in_use",
+      "CPF/CNPJ já cadastrado.",
+    ));
+  }
+
+  let client_id = Uuid::new_v4().to_string();
+  let now = now_iso();
+  let status = "ACTIVE".to_string();
+
+  conn.execute(
+    "INSERT INTO CLIENTS (id, type, name, cpf_cnpj, email, phone, notes, status, created_at, updated_at)
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+    params![
+      client_id,
+      client_type,
+      name,
+      cpf_cnpj,
+      email,
+      phone,
+      notes,
+      status,
+      now,
+      now
+    ],
+  )?;
+
+  insert_audit_log(
+    &conn,
+    &admin.id,
+    "create_client",
+    Some("CLIENT"),
+    Some(&client_id),
+    Some("Cliente criado"),
+    None,
+  )?;
+
+  Ok(ClientDetail {
+    id: client_id,
+    client_type,
+    name,
+    cpf_cnpj,
+    email,
+    phone,
+    notes,
+    status,
+    created_at: now.clone(),
+    updated_at: now,
+  })
+}
+
+#[tauri::command]
+fn clients_update(
+  app: AppHandle,
+  state: State<'_, AppState>,
+  session_id: String,
+  id: String,
+  payload: UpdateClientPayload,
+) -> AppResult<ClientDetail> {
+  let path = db_path(&app, &state)?;
+  let conn = open_connection(&path)?;
+  run_migrations(&conn)?;
+  let admin = require_admin_session(&conn, &session_id)?;
+
+  let existing: Option<(String, String)> = conn
+    .query_row(
+      "SELECT status, created_at FROM CLIENTS WHERE id = ?1",
+      params![id.clone()],
+      |row| Ok((row.get(0)?, row.get(1)?)),
+    )
+    .optional()?;
+  let (status, created_at) = match existing {
+    Some(values) => values,
+    None => return Err(AppError::new("not_found", "Cliente não encontrado.")),
+  };
+
+  let client_type = normalize_client_type(&payload.client_type);
+  let name = payload.name.trim().to_string();
+  let cpf_cnpj = only_digits(&payload.cpf_cnpj);
+  validate_client_payload(&client_type, &name, &cpf_cnpj)?;
+  let email = normalize_optional_field(payload.email);
+  let phone = normalize_optional_field(payload.phone);
+  let notes = normalize_optional_field(payload.notes);
+
+  let exists: Option<String> = conn
+    .query_row(
+      "SELECT id FROM CLIENTS WHERE cpf_cnpj = ?1 AND id != ?2",
+      params![cpf_cnpj, id.clone()],
+      |row| row.get(0),
+    )
+    .optional()?;
+  if exists.is_some() {
+    return Err(AppError::new(
+      "cpf_cnpj_in_use",
+      "CPF/CNPJ já cadastrado.",
+    ));
+  }
+
+  let now = now_iso();
+  conn.execute(
+    "UPDATE CLIENTS SET type = ?1, name = ?2, cpf_cnpj = ?3, email = ?4, phone = ?5, notes = ?6, updated_at = ?7
+     WHERE id = ?8",
+    params![
+      client_type,
+      name,
+      cpf_cnpj,
+      email,
+      phone,
+      notes,
+      now,
+      id.clone()
+    ],
+  )?;
+
+  insert_audit_log(
+    &conn,
+    &admin.id,
+    "update_client",
+    Some("CLIENT"),
+    Some(&id),
+    Some("Cliente atualizado"),
+    None,
+  )?;
+
+  Ok(ClientDetail {
+    id,
+    client_type,
+    name,
+    cpf_cnpj,
+    email,
+    phone,
+    notes,
+    status,
+    created_at,
+    updated_at: now,
+  })
+}
+
+#[tauri::command]
+fn clients_archive(
+  app: AppHandle,
+  state: State<'_, AppState>,
+  session_id: String,
+  id: String,
+) -> AppResult<()> {
+  let path = db_path(&app, &state)?;
+  let conn = open_connection(&path)?;
+  run_migrations(&conn)?;
+  let admin = require_admin_session(&conn, &session_id)?;
+
+  let exists: Option<String> = conn
+    .query_row("SELECT id FROM CLIENTS WHERE id = ?1", params![id.clone()], |row| {
+      row.get(0)
+    })
+    .optional()?;
+  if exists.is_none() {
+    return Err(AppError::new("not_found", "Cliente não encontrado."));
+  }
+
+  let now = now_iso();
+  conn.execute(
+    "UPDATE CLIENTS SET status = 'ARCHIVED', updated_at = ?1 WHERE id = ?2",
+    params![now, id.clone()],
+  )?;
+
+  insert_audit_log(
+    &conn,
+    &admin.id,
+    "archive_client",
+    Some("CLIENT"),
+    Some(&id),
+    Some("Cliente arquivado"),
+    None,
+  )?;
+
+  Ok(())
+}
+
 fn main() {
   tauri::Builder::default()
     .manage(AppState::default())
@@ -1394,7 +1886,12 @@ fn main() {
       teams_create,
       teams_update,
       teams_set_members,
-      teams_delete_or_archive
+      teams_delete_or_archive,
+      clients_list,
+      clients_get,
+      clients_create,
+      clients_update,
+      clients_archive
     ])
     .run(tauri::generate_context!())
     .expect("error while running tauri application");
