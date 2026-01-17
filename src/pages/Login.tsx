@@ -10,7 +10,7 @@ import {
   TextField,
   Typography
 } from '@mui/material';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import {
   authCreateInitialAdmin,
   authGetBootstrapStatus,
@@ -21,11 +21,19 @@ import { useAuth } from '../state/auth';
 
 const LoginPage = () => {
   const navigate = useNavigate();
+  const location = useLocation();
   const { setSession } = useAuth();
   const [isLoading, setIsLoading] = useState(true);
   const [isBootstrap, setIsBootstrap] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [form, setForm] = useState({ name: '', email: '', password: '' });
+
+  useEffect(() => {
+    const state = location.state as { logoutError?: string } | null;
+    if (state?.logoutError) {
+      setError(state.logoutError);
+    }
+  }, [location.state]);
 
   useEffect(() => {
     const load = async () => {

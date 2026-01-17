@@ -56,6 +56,26 @@ type ResetFormState = {
   newPassword: string;
 };
 
+const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+const PASSWORD_CHARSET =
+  'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789!@#$%&*?';
+
+const generatePassword = () => {
+  const length = 12 + Math.floor(Math.random() * 5);
+  if (typeof window !== 'undefined' && window.crypto?.getRandomValues) {
+    const values = new Uint32Array(length);
+    window.crypto.getRandomValues(values);
+    return Array.from(values)
+      .map((value) => PASSWORD_CHARSET[value % PASSWORD_CHARSET.length])
+      .join('');
+  }
+  return Array.from({ length }, () => {
+    const index = Math.floor(Math.random() * PASSWORD_CHARSET.length);
+    return PASSWORD_CHARSET[index];
+  }).join('');
+};
+
 const AdminUsers = () => {
   const { sessionId } = useAuth();
   const [filters, setFilters] = useState({ q: '', role: '', status: '' });
@@ -128,19 +148,43 @@ const AdminUsers = () => {
 
   const handleFormSubmit = async () => {
     if (!sessionId) return;
+    const trimmedName = userForm.name.trim();
+    const trimmedEmail = userForm.email.trim();
+    if (!trimmedName) {
+      setToast({ message: 'Informe o nome do usuário.', severity: 'error' });
+      return;
+    }
+    if (!EMAIL_REGEX.test(trimmedEmail)) {
+      setToast({ message: 'Informe um email válido.', severity: 'error' });
+      return;
+    }
+    if (formMode === 'create') {
+      const password = userForm.passwordInitial?.trim() ?? '';
+      if (!password) {
+        setToast({ message: 'Informe a senha inicial.', severity: 'error' });
+        return;
+      }
+      if (password.length < 8) {
+        setToast({
+          message: 'A senha inicial deve ter no mínimo 8 caracteres.',
+          severity: 'error'
+        });
+        return;
+      }
+    }
     try {
       if (formMode === 'create') {
         await usersCreate(sessionId, {
-          name: userForm.name,
-          email: userForm.email,
+          name: trimmedName,
+          email: trimmedEmail,
           role: userForm.role,
           passwordInitial: userForm.passwordInitial || ''
         });
         setToast({ message: 'Usuário criado com sucesso.', severity: 'success' });
       } else if (userForm.id) {
         await usersUpdate(sessionId, userForm.id, {
-          name: userForm.name,
-          email: userForm.email,
+          name: trimmedName,
+          email: trimmedEmail,
           role: userForm.role
         });
         setToast({ message: 'Usuário atualizado com sucesso.', severity: 'success' });
@@ -331,15 +375,32 @@ const AdminUsers = () => {
               </Select>
             </FormControl>
             {formMode === 'create' && (
-              <TextField
-                label="Senha inicial"
-                type="password"
-                value={userForm.passwordInitial}
-                onChange={(event) =>
-                  setUserForm((prev) => ({ ...prev, passwordInitial: event.target.value }))
-                }
-                fullWidth
-              />
+              <Stack spacing={1}>
+                <TextField
+                  label="Senha inicial"
+                  type="password"
+                  value={userForm.passwordInitial}
+                  onChange={(event) =>
+                    setUserForm((prev) => ({ ...prev, passwordInitial: event.target.value }))
+                  }
+                  fullWidth
+                  required
+                />
+                <Box display="flex" justifyContent="flex-end">
+                  <Button
+                    size="small"
+                    variant="outlined"
+                    onClick={() =>
+                      setUserForm((prev) => ({
+                        ...prev,
+                        passwordInitial: generatePassword()
+                      }))
+                    }
+                  >
+                    Gerar senha
+                  </Button>
+                </Box>
+              </Stack>
             )}
           </Stack>
         </DialogContent>
