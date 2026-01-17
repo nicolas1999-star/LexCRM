@@ -80,6 +80,9 @@ const AppShell = () => {
               <ListItemButton component={NavLink} to="/admin/users">
                 <ListItemText primary="Usuários" />
               </ListItemButton>
+              <ListItemButton component={NavLink} to="/admin/clients">
+                <ListItemText primary="Clientes" />
+              </ListItemButton>
               <ListItemButton component={NavLink} to="/admin/teams">
                 <ListItemText primary="Equipes" />
               </ListItemButton>
