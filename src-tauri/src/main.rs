@@ -301,6 +301,26 @@ struct CreateAppointmentPayload {
   conclusion: String,
 }
 
+#[allow(dead_code)]
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CreateAttendancePayload {
+  occurred_at: String,
+  channel: String,
+  subject: String,
+  notes: String,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct UpdateAttendancePayload {
+  occurred_at: String,
+  channel: String,
+  subject: String,
+  notes: String,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct DocumentGeneratePayload {
