@@ -6,6 +6,7 @@ import AppShell from './components/AppShell';
 import AdminUsers from './pages/AdminUsers';
 import AdminTeams from './pages/AdminTeams';
 import AdminClients from './pages/AdminClients';
+import ClientDetailPage from './pages/ClientDetail';
 
 const ADMIN_ROLES = new Set<Role>([Role.ADMIN, Role.PARTNER]);
 
@@ -57,6 +58,19 @@ const AppRoutes = () => {
           element={
             <RequireAdmin>
               <AdminClients />
+            </RequireAdmin>
+          }
+        />
+      </Route>
+      <Route
+        path="/clients/:id"
+        element={session ? <AppShell /> : <Navigate to="/login" replace />}
+      >
+        <Route
+          index
+          element={
+            <RequireAdmin>
+              <ClientDetailPage />
             </RequireAdmin>
           }
         />
