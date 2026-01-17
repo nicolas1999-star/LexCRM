@@ -21,6 +21,7 @@ import {
   TextField,
   Typography
 } from '@mui/material';
+import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../state/auth';
 import {
   clientsArchive,
@@ -92,6 +93,7 @@ const getStatusLabel = (status: ClientStatus) => (status === 'ACTIVE' ? 'Ativo' 
 
 const AdminClients = () => {
   const { sessionId } = useAuth();
+  const navigate = useNavigate();
   const [filters, setFilters] = useState({
     q: '',
     type: '',
@@ -326,6 +328,13 @@ const AdminClients = () => {
                 <TableCell>{getStatusLabel(client.status)}</TableCell>
                 <TableCell align="right">
                   <Stack direction="row" spacing={1} justifyContent="flex-end">
+                    <Button
+                      size="small"
+                      variant="outlined"
+                      onClick={() => navigate(`/admin/clients/${client.id}`)}
+                    >
+                      Processos
+                    </Button>
                     <Button size="small" variant="outlined" onClick={() => openEditForm(client)}>
                       Editar
                     </Button>

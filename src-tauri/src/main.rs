@@ -160,6 +160,48 @@ struct ClientDetail {
   updated_at: String,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CaseSummary {
+  id: String,
+  client_id: String,
+  identifier_type: String,
+  identifier: String,
+  court_city: Option<String>,
+  court_unit: Option<String>,
+  panel: Option<String>,
+  rapporteur: Option<String>,
+  distributed_at: Option<String>,
+  closed_at: Option<String>,
+  area: Option<String>,
+  phase: Option<String>,
+  value_amount: Option<f64>,
+  documents_path: Option<String>,
+  created_at: String,
+  updated_at: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CaseDetail {
+  id: String,
+  client_id: String,
+  identifier_type: String,
+  identifier: String,
+  court_city: Option<String>,
+  court_unit: Option<String>,
+  panel: Option<String>,
+  rapporteur: Option<String>,
+  distributed_at: Option<String>,
+  closed_at: Option<String>,
+  area: Option<String>,
+  phase: Option<String>,
+  value_amount: Option<f64>,
+  documents_path: Option<String>,
+  created_at: String,
+  updated_at: String,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct CreateInitialAdminPayload {
@@ -248,6 +290,41 @@ struct UpdateClientPayload {
   email: Option<String>,
   phone: Option<String>,
   notes: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CreateCasePayload {
+  client_id: String,
+  identifier_type: String,
+  identifier: String,
+  court_city: Option<String>,
+  court_unit: Option<String>,
+  panel: Option<String>,
+  rapporteur: Option<String>,
+  distributed_at: Option<String>,
+  closed_at: Option<String>,
+  area: Option<String>,
+  phase: Option<String>,
+  value_amount: Option<f64>,
+  documents_path: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct UpdateCasePayload {
+  identifier_type: String,
+  identifier: String,
+  court_city: Option<String>,
+  court_unit: Option<String>,
+  panel: Option<String>,
+  rapporteur: Option<String>,
+  distributed_at: Option<String>,
+  closed_at: Option<String>,
+  area: Option<String>,
+  phase: Option<String>,
+  value_amount: Option<f64>,
+  documents_path: Option<String>,
 }
 
 #[derive(Debug)]
@@ -368,6 +445,32 @@ fn run_migrations(conn: &Connection) -> AppResult<()> {
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
       );
+      ",
+    ),
+    (
+      "0005_cases",
+      "\
+      CREATE TABLE IF NOT EXISTS CASES(
+        id TEXT PRIMARY KEY,
+        client_id TEXT NOT NULL,
+        identifier_type TEXT NOT NULL,
+        identifier TEXT NOT NULL,
+        court_city TEXT,
+        court_unit TEXT,
+        panel TEXT,
+        rapporteur TEXT,
+        distributed_at TEXT,
+        closed_at TEXT,
+        area TEXT,
+        phase TEXT,
+        value_amount REAL,
+        documents_path TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY (client_id) REFERENCES CLIENTS(id)
+      );
+      CREATE INDEX IF NOT EXISTS idx_cases_client_id ON CASES(client_id);
+      CREATE INDEX IF NOT EXISTS idx_cases_identifier ON CASES(identifier);
       ",
     ),
   ];
@@ -1546,6 +1649,32 @@ fn validate_client_payload(client_type: &str, name: &str, cpf_cnpj: &str) -> App
   Ok(())
 }
 
+fn normalize_identifier_type(value: &str) -> String {
+  value.trim().to_uppercase()
+}
+
+fn validate_case_payload(identifier_type: &str, identifier: &str) -> AppResult<()> {
+  if identifier_type.is_empty() {
+    return Err(AppError::new(
+      "validation_error",
+      "Tipo do identificador é obrigatório.",
+    ));
+  }
+  if identifier_type != "CNJ" && identifier_type != "ADM" && identifier_type != "OUTRO" {
+    return Err(AppError::new(
+      "validation_error",
+      "Tipo do identificador inválido.",
+    ));
+  }
+  if identifier.is_empty() {
+    return Err(AppError::new(
+      "validation_error",
+      "Identificador é obrigatório.",
+    ));
+  }
+  Ok(())
+}
+
 #[tauri::command]
 fn clients_list(
   app: AppHandle,
@@ -1859,6 +1988,314 @@ fn clients_archive(
   Ok(())
 }
 
+#[tauri::command]
+fn cases_list(
+  app: AppHandle,
+  state: State<'_, AppState>,
+  session_id: String,
+  client_id: String,
+) -> AppResult<Vec<CaseSummary>> {
+  let path = db_path(&app, &state)?;
+  let conn = open_connection(&path)?;
+  run_migrations(&conn)?;
+  require_admin_session(&conn, &session_id)?;
+
+  let exists: Option<String> = conn
+    .query_row(
+      "SELECT id FROM CLIENTS WHERE id = ?1",
+      params![client_id.clone()],
+      |row| row.get(0),
+    )
+    .optional()?;
+  if exists.is_none() {
+    return Err(AppError::new("not_found", "Cliente não encontrado."));
+  }
+
+  let mut stmt = conn.prepare(
+    "SELECT id, client_id, identifier_type, identifier, court_city, court_unit, panel, rapporteur,
+            distributed_at, closed_at, area, phase, value_amount, documents_path, created_at, updated_at
+     FROM CASES
+     WHERE client_id = ?1
+     ORDER BY created_at DESC",
+  )?;
+  let rows = stmt.query_map(params![client_id], |row| {
+    Ok(CaseSummary {
+      id: row.get(0)?,
+      client_id: row.get(1)?,
+      identifier_type: row.get(2)?,
+      identifier: row.get(3)?,
+      court_city: row.get(4)?,
+      court_unit: row.get(5)?,
+      panel: row.get(6)?,
+      rapporteur: row.get(7)?,
+      distributed_at: row.get(8)?,
+      closed_at: row.get(9)?,
+      area: row.get(10)?,
+      phase: row.get(11)?,
+      value_amount: row.get(12)?,
+      documents_path: row.get(13)?,
+      created_at: row.get(14)?,
+      updated_at: row.get(15)?,
+    })
+  })?;
+
+  let mut cases = Vec::new();
+  for row in rows {
+    cases.push(row?);
+  }
+  Ok(cases)
+}
+
+#[tauri::command]
+fn cases_get(
+  app: AppHandle,
+  state: State<'_, AppState>,
+  session_id: String,
+  id: String,
+) -> AppResult<CaseDetail> {
+  let path = db_path(&app, &state)?;
+  let conn = open_connection(&path)?;
+  run_migrations(&conn)?;
+  require_admin_session(&conn, &session_id)?;
+
+  let mut stmt = conn.prepare(
+    "SELECT id, client_id, identifier_type, identifier, court_city, court_unit, panel, rapporteur,
+            distributed_at, closed_at, area, phase, value_amount, documents_path, created_at, updated_at
+     FROM CASES WHERE id = ?1",
+  )?;
+  let case_detail = stmt.query_row(params![id], |row| {
+    Ok(CaseDetail {
+      id: row.get(0)?,
+      client_id: row.get(1)?,
+      identifier_type: row.get(2)?,
+      identifier: row.get(3)?,
+      court_city: row.get(4)?,
+      court_unit: row.get(5)?,
+      panel: row.get(6)?,
+      rapporteur: row.get(7)?,
+      distributed_at: row.get(8)?,
+      closed_at: row.get(9)?,
+      area: row.get(10)?,
+      phase: row.get(11)?,
+      value_amount: row.get(12)?,
+      documents_path: row.get(13)?,
+      created_at: row.get(14)?,
+      updated_at: row.get(15)?,
+    })
+  });
+
+  match case_detail {
+    Ok(case_detail) => Ok(case_detail),
+    Err(rusqlite::Error::QueryReturnedNoRows) => {
+      Err(AppError::new("not_found", "Processo não encontrado."))
+    }
+    Err(err) => Err(err.into()),
+  }
+}
+
+#[tauri::command]
+fn cases_create(
+  app: AppHandle,
+  state: State<'_, AppState>,
+  session_id: String,
+  payload: CreateCasePayload,
+) -> AppResult<CaseDetail> {
+  let path = db_path(&app, &state)?;
+  let conn = open_connection(&path)?;
+  run_migrations(&conn)?;
+  let admin = require_admin_session(&conn, &session_id)?;
+
+  let client_id = payload.client_id.trim().to_string();
+  if client_id.is_empty() {
+    return Err(AppError::new("validation_error", "Cliente é obrigatório."));
+  }
+  let exists: Option<String> = conn
+    .query_row(
+      "SELECT id FROM CLIENTS WHERE id = ?1",
+      params![client_id.clone()],
+      |row| row.get(0),
+    )
+    .optional()?;
+  if exists.is_none() {
+    return Err(AppError::new("not_found", "Cliente não encontrado."));
+  }
+
+  let identifier_type = normalize_identifier_type(&payload.identifier_type);
+  let identifier = payload.identifier.trim().to_string();
+  validate_case_payload(&identifier_type, &identifier)?;
+
+  let court_city = normalize_optional_field(payload.court_city);
+  let court_unit = normalize_optional_field(payload.court_unit);
+  let panel = normalize_optional_field(payload.panel);
+  let rapporteur = normalize_optional_field(payload.rapporteur);
+  let distributed_at = normalize_optional_field(payload.distributed_at);
+  let closed_at = normalize_optional_field(payload.closed_at);
+  let area = normalize_optional_field(payload.area);
+  let phase = normalize_optional_field(payload.phase);
+  let documents_path = normalize_optional_field(payload.documents_path);
+
+  let case_id = Uuid::new_v4().to_string();
+  let now = now_iso();
+
+  conn.execute(
+    "INSERT INTO CASES (id, client_id, identifier_type, identifier, court_city, court_unit, panel,
+                        rapporteur, distributed_at, closed_at, area, phase, value_amount,
+                        documents_path, created_at, updated_at)
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
+    params![
+      case_id,
+      client_id,
+      identifier_type,
+      identifier,
+      court_city,
+      court_unit,
+      panel,
+      rapporteur,
+      distributed_at,
+      closed_at,
+      area,
+      phase,
+      payload.value_amount,
+      documents_path,
+      now,
+      now
+    ],
+  )?;
+
+  insert_audit_log(
+    &conn,
+    &admin.id,
+    "create_case",
+    Some("CASE"),
+    Some(&case_id),
+    Some("Processo criado"),
+    None,
+  )?;
+
+  Ok(CaseDetail {
+    id: case_id,
+    client_id,
+    identifier_type,
+    identifier,
+    court_city,
+    court_unit,
+    panel,
+    rapporteur,
+    distributed_at,
+    closed_at,
+    area,
+    phase,
+    value_amount: payload.value_amount,
+    documents_path,
+    created_at: now.clone(),
+    updated_at: now,
+  })
+}
+
+#[tauri::command]
+fn cases_update(
+  app: AppHandle,
+  state: State<'_, AppState>,
+  session_id: String,
+  id: String,
+  payload: UpdateCasePayload,
+) -> AppResult<CaseDetail> {
+  let path = db_path(&app, &state)?;
+  let conn = open_connection(&path)?;
+  run_migrations(&conn)?;
+  let admin = require_admin_session(&conn, &session_id)?;
+
+  let existing: Option<(String, String)> = conn
+    .query_row(
+      "SELECT client_id, created_at FROM CASES WHERE id = ?1",
+      params![id.clone()],
+      |row| Ok((row.get(0)?, row.get(1)?)),
+    )
+    .optional()?;
+  let (client_id, created_at) = match existing {
+    Some(values) => values,
+    None => return Err(AppError::new("not_found", "Processo não encontrado.")),
+  };
+
+  let identifier_type = normalize_identifier_type(&payload.identifier_type);
+  let identifier = payload.identifier.trim().to_string();
+  validate_case_payload(&identifier_type, &identifier)?;
+
+  let court_city = normalize_optional_field(payload.court_city);
+  let court_unit = normalize_optional_field(payload.court_unit);
+  let panel = normalize_optional_field(payload.panel);
+  let rapporteur = normalize_optional_field(payload.rapporteur);
+  let distributed_at = normalize_optional_field(payload.distributed_at);
+  let closed_at = normalize_optional_field(payload.closed_at);
+  let area = normalize_optional_field(payload.area);
+  let phase = normalize_optional_field(payload.phase);
+  let documents_path = normalize_optional_field(payload.documents_path);
+
+  let now = now_iso();
+  conn.execute(
+    "UPDATE CASES
+     SET identifier_type = ?1,
+         identifier = ?2,
+         court_city = ?3,
+         court_unit = ?4,
+         panel = ?5,
+         rapporteur = ?6,
+         distributed_at = ?7,
+         closed_at = ?8,
+         area = ?9,
+         phase = ?10,
+         value_amount = ?11,
+         documents_path = ?12,
+         updated_at = ?13
+     WHERE id = ?14",
+    params![
+      identifier_type,
+      identifier,
+      court_city,
+      court_unit,
+      panel,
+      rapporteur,
+      distributed_at,
+      closed_at,
+      area,
+      phase,
+      payload.value_amount,
+      documents_path,
+      now,
+      id.clone()
+    ],
+  )?;
+
+  insert_audit_log(
+    &conn,
+    &admin.id,
+    "update_case",
+    Some("CASE"),
+    Some(&id),
+    Some("Processo atualizado"),
+    None,
+  )?;
+
+  Ok(CaseDetail {
+    id,
+    client_id,
+    identifier_type,
+    identifier,
+    court_city,
+    court_unit,
+    panel,
+    rapporteur,
+    distributed_at,
+    closed_at,
+    area,
+    phase,
+    value_amount: payload.value_amount,
+    documents_path,
+    created_at,
+    updated_at: now,
+  })
+}
+
 fn main() {
   tauri::Builder::default()
     .manage(AppState::default())
@@ -1891,7 +2328,11 @@ fn main() {
       clients_get,
       clients_create,
       clients_update,
-      clients_archive
+      clients_archive,
+      cases_list,
+      cases_get,
+      cases_create,
+      cases_update
     ])
     .run(tauri::generate_context!())
     .expect("error while running tauri application");
