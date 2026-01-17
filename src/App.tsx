@@ -72,6 +72,19 @@ const AppRoutes = () => {
           }
         />
       </Route>
+      <Route
+        path="/clients/:id"
+        element={session ? <AppShell /> : <Navigate to="/login" replace />}
+      >
+        <Route
+          index
+          element={
+            <RequireAdmin>
+              <ClientDetailPage />
+            </RequireAdmin>
+          }
+        />
+      </Route>
       <Route path="*" element={<Navigate to="/login" replace />} />
     </Routes>
   );

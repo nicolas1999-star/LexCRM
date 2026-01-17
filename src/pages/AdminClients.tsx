@@ -21,6 +21,7 @@ import {
   TextField,
   Typography
 } from '@mui/material';
+import { Link } from 'react-router-dom';
 import { useAuth } from '../state/auth';
 import {
   clientsArchive,
@@ -326,6 +327,14 @@ const AdminClients = () => {
                 <TableCell>{getStatusLabel(client.status)}</TableCell>
                 <TableCell align="right">
                   <Stack direction="row" spacing={1} justifyContent="flex-end">
+                    <Button
+                      size="small"
+                      variant="outlined"
+                      component={Link}
+                      to={`/clients/${client.id}`}
+                    >
+                      Atendimentos
+                    </Button>
                     <Button size="small" variant="outlined" onClick={() => openEditForm(client)}>
                       Editar
                     </Button>
