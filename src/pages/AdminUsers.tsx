@@ -31,7 +31,8 @@ import {
   type UserDetail,
   type UserStatus
 } from '../api/users';
-import { authReauthCheck, type AppError } from '../api/auth';
+import { authReauthCheck } from '../api/auth';
+import { getErrorMessage } from '../api/errors';
 import { getRoleLabel } from '../constants/roles';
 
 const roleOptions = Object.values(Role);
@@ -109,8 +110,7 @@ const AdminUsers = () => {
       });
       setUsers(data);
     } catch (err) {
-      const message = (err as AppError)?.message ?? 'Falha ao carregar usuários.';
-      setError(message);
+      setError(getErrorMessage(err, 'Falha ao carregar usuários.'));
     } finally {
       setIsLoading(false);
     }
@@ -158,8 +158,9 @@ const AdminUsers = () => {
       setToast({ message: 'Informe um email válido.', severity: 'error' });
       return;
     }
+    let password = '';
     if (formMode === 'create') {
-      const password = userForm.passwordInitial?.trim() ?? '';
+      password = userForm.passwordInitial?.trim() ?? '';
       if (!password) {
         setToast({ message: 'Informe a senha inicial.', severity: 'error' });
         return;
@@ -178,7 +179,7 @@ const AdminUsers = () => {
           name: trimmedName,
           email: trimmedEmail,
           role: userForm.role,
-          passwordInitial: userForm.passwordInitial || ''
+          passwordInitial: password
         });
         setToast({ message: 'Usuário criado com sucesso.', severity: 'success' });
       } else if (userForm.id) {
@@ -192,8 +193,10 @@ const AdminUsers = () => {
       setIsFormOpen(false);
       await loadUsers();
     } catch (err) {
-      const message = (err as AppError)?.message ?? 'Falha ao salvar usuário.';
-      setToast({ message, severity: 'error' });
+      setToast({
+        message: getErrorMessage(err, 'Falha ao salvar usuário.'),
+        severity: 'error'
+      });
     }
   };
 
@@ -205,8 +208,10 @@ const AdminUsers = () => {
       setToast({ message: 'Status atualizado.', severity: 'success' });
       await loadUsers();
     } catch (err) {
-      const message = (err as AppError)?.message ?? 'Falha ao alterar status.';
-      setToast({ message, severity: 'error' });
+      setToast({
+        message: getErrorMessage(err, 'Falha ao alterar status.'),
+        severity: 'error'
+      });
     }
   };
 
@@ -222,8 +227,10 @@ const AdminUsers = () => {
       setToast({ message: 'Senha redefinida.', severity: 'success' });
       setResetForm(null);
     } catch (err) {
-      const message = (err as AppError)?.message ?? 'Falha ao redefinir senha.';
-      setToast({ message, severity: 'error' });
+      setToast({
+        message: getErrorMessage(err, 'Falha ao redefinir senha.'),
+        severity: 'error'
+      });
     }
   };
 

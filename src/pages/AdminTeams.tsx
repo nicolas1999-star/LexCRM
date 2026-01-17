@@ -24,7 +24,7 @@ import {
 import { useAuth } from '../state/auth';
 import { teamsCreate, teamsDelete, teamsList, teamsSetMembers, teamsUpdate, type Team } from '../api/teams';
 import { usersList, type UserSummary } from '../api/users';
-import { type AppError } from '../api/auth';
+import { getErrorMessage } from '../api/errors';
 
 type ToastState = {
   message: string;
@@ -70,8 +70,7 @@ const AdminTeams = () => {
       setTeams(teamsData);
       setUsers(usersData);
     } catch (err) {
-      const message = (err as AppError)?.message ?? 'Falha ao carregar equipes.';
-      setError(message);
+      setError(getErrorMessage(err, 'Falha ao carregar equipes.'));
     } finally {
       setIsLoading(false);
     }
@@ -124,8 +123,10 @@ const AdminTeams = () => {
       setIsFormOpen(false);
       await loadData();
     } catch (err) {
-      const message = (err as AppError)?.message ?? 'Falha ao salvar equipe.';
-      setToast({ message, severity: 'error' });
+      setToast({
+        message: getErrorMessage(err, 'Falha ao salvar equipe.'),
+        severity: 'error'
+      });
     }
   };
 
@@ -137,8 +138,10 @@ const AdminTeams = () => {
       setDeleteTarget(null);
       await loadData();
     } catch (err) {
-      const message = (err as AppError)?.message ?? 'Falha ao remover equipe.';
-      setToast({ message, severity: 'error' });
+      setToast({
+        message: getErrorMessage(err, 'Falha ao remover equipe.'),
+        severity: 'error'
+      });
     }
   };
 
