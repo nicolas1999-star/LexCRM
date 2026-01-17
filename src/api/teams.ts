@@ -27,7 +27,7 @@ export type UpdateTeamPayload = {
 };
 
 export const teamsList = async (sessionId: string): Promise<Team[]> => {
-  return invoke('teams_list', { session_id: sessionId });
+  return invoke('teams_list', { sessionId });
 };
 
 export const teamsCreate = async (
@@ -35,7 +35,7 @@ export const teamsCreate = async (
   payload: CreateTeamPayload
 ): Promise<Team> => {
   return invoke('teams_create', {
-    session_id: sessionId,
+    sessionId,
     payload: {
       name: payload.name,
       description: payload.description,
@@ -51,7 +51,7 @@ export const teamsUpdate = async (
   payload: UpdateTeamPayload
 ): Promise<Team> => {
   return invoke('teams_update', {
-    session_id: sessionId,
+    sessionId,
     id,
     payload: {
       name: payload.name,
@@ -67,12 +67,12 @@ export const teamsSetMembers = async (
   userIds: string[]
 ): Promise<Team> => {
   return invoke('teams_set_members', {
-    session_id: sessionId,
-    team_id: teamId,
-    user_ids: userIds
+    sessionId,
+    teamId,
+    userIds
   });
 };
 
 export const teamsDelete = async (sessionId: string, id: string): Promise<void> => {
-  return invoke('teams_delete_or_archive', { session_id: sessionId, id });
+  return invoke('teams_delete_or_archive', { sessionId, id });
 };
