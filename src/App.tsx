@@ -64,7 +64,6 @@ const AppRoutes = () => {
           }
         />
         <Route
-          path="clients/:clientId"
           path="clients/:id"
           element={
             <RequireAdmin>
