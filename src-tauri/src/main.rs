@@ -52,6 +52,12 @@ impl From<argon2::password_hash::Error> for AppError {
   }
 }
 
+impl From<std::io::Error> for AppError {
+  fn from(err: std::io::Error) -> Self {
+    AppError::new("io_error", err.to_string())
+  }
+}
+
 #[derive(Default)]
 struct AppState {
   db_path: Mutex<Option<PathBuf>>,
@@ -177,6 +183,13 @@ struct CaseSummary {
   phase: Option<String>,
   value_amount: Option<f64>,
   documents_path: Option<String>,
+struct AttendanceSummary {
+  id: String,
+  client_id: String,
+  occurred_at: String,
+  channel: String,
+  subject: String,
+  notes: String,
   created_at: String,
   updated_at: String,
 }
@@ -198,6 +211,13 @@ struct CaseDetail {
   phase: Option<String>,
   value_amount: Option<f64>,
   documents_path: Option<String>,
+struct AttendanceDetail {
+  id: String,
+  client_id: String,
+  occurred_at: String,
+  channel: String,
+  subject: String,
+  notes: String,
   created_at: String,
   updated_at: String,
 }
@@ -308,6 +328,102 @@ struct CreateCasePayload {
   phase: Option<String>,
   value_amount: Option<f64>,
   documents_path: Option<String>,
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AppointmentSummary {
+  id: String,
+  client_name: String,
+  client_document: String,
+  client_email: Option<String>,
+  client_phone: Option<String>,
+  title: String,
+  attendance_date: String,
+  created_at: String,
+  updated_at: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AppointmentDetail {
+  id: String,
+  client_name: String,
+  client_document: String,
+  client_email: Option<String>,
+  client_phone: Option<String>,
+  title: String,
+  attendance_date: String,
+  history: String,
+  analysis: String,
+  conclusion: String,
+  created_at: String,
+  updated_at: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CreateAppointmentPayload {
+  client_name: String,
+  client_document: String,
+  client_email: Option<String>,
+  client_phone: Option<String>,
+  title: String,
+  attendance_date: String,
+  history: String,
+  analysis: String,
+  conclusion: String,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CreateAttendancePayload {
+  occurred_at: String,
+  channel: String,
+  subject: String,
+  notes: String,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct UpdateAttendancePayload {
+  occurred_at: String,
+  channel: String,
+  subject: String,
+  notes: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DocumentGeneratePayload {
+  document_type: String,
+  office_name: String,
+  generated_at: String,
+  client_name: String,
+  client_document: String,
+  client_email: Option<String>,
+  client_phone: Option<String>,
+  title: String,
+  attendance_date: String,
+  history: String,
+  analysis: String,
+  conclusion: String,
+  appointment_id: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DocumentHtmlResponse {
+  html: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DocumentExportHtmlPayload {
+  html: String,
+  file_path: String,
+  document_type: String,
+  appointment_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -325,6 +441,10 @@ struct UpdateCasePayload {
   phase: Option<String>,
   value_amount: Option<f64>,
   documents_path: Option<String>,
+struct DocumentLogExportPayload {
+  document_type: String,
+  appointment_id: Option<String>,
+  format: String,
 }
 
 #[derive(Debug)]
@@ -465,6 +585,30 @@ fn run_migrations(conn: &Connection) -> AppResult<()> {
         phase TEXT,
         value_amount REAL,
         documents_path TEXT,
+      "0004_appointments",
+      "\
+      CREATE TABLE IF NOT EXISTS APPOINTMENTS(
+        id TEXT PRIMARY KEY,
+        client_name TEXT NOT NULL,
+        client_document TEXT NOT NULL,
+        client_email TEXT,
+        client_phone TEXT,
+        title TEXT NOT NULL,
+        attendance_date TEXT NOT NULL,
+        history TEXT NOT NULL,
+        analysis TEXT NOT NULL,
+        conclusion TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      "0004_attendances",
+      "\
+      CREATE TABLE IF NOT EXISTS ATTENDANCES(
+        id TEXT PRIMARY KEY,
+        client_id TEXT NOT NULL,
+        occurred_at TEXT NOT NULL,
+        channel TEXT NOT NULL,
+        subject TEXT NOT NULL,
+        notes TEXT NOT NULL,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
         FOREIGN KEY (client_id) REFERENCES CLIENTS(id)
@@ -681,6 +825,197 @@ fn insert_audit_log(
     ],
   )?;
   Ok(())
+}
+
+fn escape_html(value: &str) -> String {
+  value
+    .replace('&', "&amp;")
+    .replace('<', "&lt;")
+    .replace('>', "&gt;")
+    .replace('"', "&quot;")
+    .replace('\'', "&#39;")
+}
+
+fn text_to_paragraphs(value: &str) -> String {
+  let escaped = escape_html(value.trim());
+  let chunks: Vec<&str> = escaped.split("\n\n").collect();
+  let mut paragraphs = Vec::new();
+  for chunk in chunks {
+    let trimmed = chunk.trim();
+    if trimmed.is_empty() {
+      continue;
+    }
+    let line_breaks = trimmed.replace('\n', "<br />");
+    paragraphs.push(format!("<p>{}</p>", line_breaks));
+  }
+  if paragraphs.is_empty() {
+    "<p></p>".to_string()
+  } else {
+    paragraphs.join("\n")
+  }
+}
+
+fn document_title(document_type: &str) -> String {
+  match document_type {
+    "PARECER" => "Parecer",
+    _ => "Relatório de atendimento",
+  }
+  .to_string()
+}
+
+fn build_document_html(payload: &DocumentGeneratePayload) -> String {
+  let office_name = escape_html(payload.office_name.trim());
+  let client_name = escape_html(payload.client_name.trim());
+  let client_document = escape_html(payload.client_document.trim());
+  let client_email = payload
+    .client_email
+    .as_deref()
+    .map(|value| escape_html(value.trim()));
+  let client_phone = payload
+    .client_phone
+    .as_deref()
+    .map(|value| escape_html(value.trim()));
+  let title = escape_html(payload.title.trim());
+  let attendance_date = escape_html(payload.attendance_date.trim());
+  let generated_at = escape_html(payload.generated_at.trim());
+  let history_html = text_to_paragraphs(&payload.history);
+  let analysis_html = text_to_paragraphs(&payload.analysis);
+  let conclusion_html = text_to_paragraphs(&payload.conclusion);
+  let document_title = document_title(payload.document_type.trim());
+
+  let mut client_lines = vec![
+    format!("<strong>Cliente:</strong> {}", client_name),
+    format!("<strong>CPF/CNPJ:</strong> {}", client_document),
+  ];
+  if let Some(email) = client_email {
+    if !email.is_empty() {
+      client_lines.push(format!("<strong>Email:</strong> {}", email));
+    }
+  }
+  if let Some(phone) = client_phone {
+    if !phone.is_empty() {
+      client_lines.push(format!("<strong>Telefone:</strong> {}", phone));
+    }
+  }
+
+  format!(
+    r#"<!DOCTYPE html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="utf-8" />
+    <title>{document_title}</title>
+    <style>
+      :root {{
+        --text-color: #1c1c1c;
+        --muted-color: #4f4f4f;
+      }}
+      body {{
+        font-family: "Times New Roman", "Georgia", serif;
+        font-size: 12pt;
+        line-height: 1.5;
+        color: var(--text-color);
+        margin: 2.5cm 2cm 2.5cm 3cm;
+      }}
+      header {{
+        text-align: center;
+        margin-bottom: 28px;
+      }}
+      header .office {{
+        font-size: 13pt;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.6px;
+      }}
+      header .title {{
+        margin-top: 18px;
+        font-size: 14pt;
+        font-weight: 600;
+      }}
+      header .meta {{
+        margin-top: 14px;
+        color: var(--muted-color);
+        font-size: 11pt;
+      }}
+      .section {{
+        margin-bottom: 18px;
+      }}
+      .section h2 {{
+        font-size: 12pt;
+        letter-spacing: 0.4px;
+        text-transform: uppercase;
+        margin-bottom: 8px;
+      }}
+      .section p {{
+        margin: 0 0 8px 0;
+        text-align: justify;
+      }}
+      .section .identification {{
+        margin-top: 6px;
+        color: var(--muted-color);
+      }}
+      .signature {{
+        margin-top: 36px;
+        text-align: center;
+      }}
+      .signature .line {{
+        display: inline-block;
+        width: 70%;
+        border-top: 1px solid #555;
+        margin-top: 40px;
+      }}
+      .signature .label {{
+        margin-top: 8px;
+        color: var(--muted-color);
+      }}
+    </style>
+  </head>
+  <body>
+    <header>
+      <div class="office">{office_name}</div>
+      <div class="title">{document_title}</div>
+      <div class="meta">Data: {generated_at}</div>
+    </header>
+
+    <section class="section">
+      <h2>Identificação</h2>
+      <p><strong>Assunto:</strong> {title}</p>
+      <p><strong>Data do atendimento:</strong> {attendance_date}</p>
+      <div class="identification">
+        {client_lines}
+      </div>
+    </section>
+
+    <section class="section">
+      <h2>Histórico</h2>
+      {history_html}
+    </section>
+
+    <section class="section">
+      <h2>Análise</h2>
+      {analysis_html}
+    </section>
+
+    <section class="section">
+      <h2>Conclusão</h2>
+      {conclusion_html}
+    </section>
+
+    <section class="section signature">
+      <div class="line"></div>
+      <div class="label">Assinatura</div>
+    </section>
+  </body>
+</html>"#,
+    document_title = escape_html(&document_title),
+    office_name = office_name,
+    generated_at = generated_at,
+    title = title,
+    attendance_date = attendance_date,
+    client_lines = client_lines.join("<br />"),
+    history_html = history_html,
+    analysis_html = analysis_html,
+    conclusion_html = conclusion_html
+  )
 }
 
 #[tauri::command]
@@ -1671,6 +2006,55 @@ fn validate_case_payload(identifier_type: &str, identifier: &str) -> AppResult<(
       "validation_error",
       "Identificador é obrigatório.",
     ));
+fn ensure_client_exists(conn: &Connection, client_id: &str) -> AppResult<()> {
+  let exists: Option<String> = conn
+    .query_row(
+      "SELECT id FROM CLIENTS WHERE id = ?1",
+      params![client_id],
+      |row| row.get(0),
+    )
+    .optional()?;
+  if exists.is_none() {
+    return Err(AppError::new("not_found", "Cliente não encontrado."));
+  }
+  Ok(())
+}
+
+fn normalize_attendance_channel(channel: &str) -> String {
+  channel.trim().to_uppercase()
+}
+
+fn validate_attendance_payload(
+  occurred_at: &str,
+  channel: &str,
+  subject: &str,
+  notes: &str,
+) -> AppResult<()> {
+  if occurred_at.trim().is_empty() {
+    return Err(AppError::new(
+      "validation_error",
+      "Data/hora é obrigatória.",
+    ));
+  }
+  let normalized_channel = normalize_attendance_channel(channel);
+  let allowed = [
+    "PRESENCIAL",
+    "WHATSAPP",
+    "TELEFONE",
+    "EMAIL",
+    "VIDEO",
+  ];
+  if !allowed.contains(&normalized_channel.as_str()) {
+    return Err(AppError::new(
+      "validation_error",
+      "Canal de atendimento inválido.",
+    ));
+  }
+  if subject.trim().is_empty() {
+    return Err(AppError::new("validation_error", "Assunto é obrigatório."));
+  }
+  if notes.trim().is_empty() {
+    return Err(AppError::new("validation_error", "Notas são obrigatórias."));
   }
   Ok(())
 }
@@ -2048,6 +2432,57 @@ fn cases_list(
 
 #[tauri::command]
 fn cases_get(
+fn normalize_document_type(value: &str) -> String {
+  value.trim().to_uppercase()
+}
+
+fn normalize_required_field(value: &str, label: &str) -> AppResult<String> {
+  let trimmed = value.trim();
+  if trimmed.is_empty() {
+    return Err(AppError::new("validation_error", format!("{} é obrigatório.", label)));
+  }
+  Ok(trimmed.to_string())
+}
+
+#[tauri::command]
+fn appointments_list(
+  app: AppHandle,
+  state: State<'_, AppState>,
+  session_id: String,
+) -> AppResult<Vec<AppointmentSummary>> {
+  let path = db_path(&app, &state)?;
+  let conn = open_connection(&path)?;
+  run_migrations(&conn)?;
+  require_active_session(&conn, &session_id)?;
+
+  let mut stmt = conn.prepare(
+    "SELECT id, client_name, client_document, client_email, client_phone, title, attendance_date, created_at, updated_at
+     FROM APPOINTMENTS
+     ORDER BY attendance_date DESC, created_at DESC",
+  )?;
+  let rows = stmt.query_map([], |row| {
+    Ok(AppointmentSummary {
+      id: row.get(0)?,
+      client_name: row.get(1)?,
+      client_document: row.get(2)?,
+      client_email: row.get(3)?,
+      client_phone: row.get(4)?,
+      title: row.get(5)?,
+      attendance_date: row.get(6)?,
+      created_at: row.get(7)?,
+      updated_at: row.get(8)?,
+    })
+  })?;
+
+  let mut appointments = Vec::new();
+  for row in rows {
+    appointments.push(row?);
+  }
+  Ok(appointments)
+}
+
+#[tauri::command]
+fn appointments_get(
   app: AppHandle,
   state: State<'_, AppState>,
   session_id: String,
@@ -2088,6 +2523,37 @@ fn cases_get(
     Ok(case_detail) => Ok(case_detail),
     Err(rusqlite::Error::QueryReturnedNoRows) => {
       Err(AppError::new("not_found", "Processo não encontrado."))
+) -> AppResult<AppointmentDetail> {
+  let path = db_path(&app, &state)?;
+  let conn = open_connection(&path)?;
+  run_migrations(&conn)?;
+  require_active_session(&conn, &session_id)?;
+
+  let mut stmt = conn.prepare(
+    "SELECT id, client_name, client_document, client_email, client_phone, title, attendance_date, history, analysis, conclusion, created_at, updated_at
+     FROM APPOINTMENTS WHERE id = ?1",
+  )?;
+  let appointment = stmt.query_row(params![id], |row| {
+    Ok(AppointmentDetail {
+      id: row.get(0)?,
+      client_name: row.get(1)?,
+      client_document: row.get(2)?,
+      client_email: row.get(3)?,
+      client_phone: row.get(4)?,
+      title: row.get(5)?,
+      attendance_date: row.get(6)?,
+      history: row.get(7)?,
+      analysis: row.get(8)?,
+      conclusion: row.get(9)?,
+      created_at: row.get(10)?,
+      updated_at: row.get(11)?,
+    })
+  });
+
+  match appointment {
+    Ok(appointment) => Ok(appointment),
+    Err(rusqlite::Error::QueryReturnedNoRows) => {
+      Err(AppError::new("not_found", "Atendimento não encontrado."))
     }
     Err(err) => Err(err.into()),
   }
@@ -2157,6 +2623,127 @@ fn cases_create(
       phase,
       payload.value_amount,
       documents_path,
+fn appointments_create(
+  app: AppHandle,
+  state: State<'_, AppState>,
+  session_id: String,
+  payload: CreateAppointmentPayload,
+) -> AppResult<AppointmentDetail> {
+  let path = db_path(&app, &state)?;
+  let conn = open_connection(&path)?;
+  run_migrations(&conn)?;
+  let session = require_active_session(&conn, &session_id)?;
+
+  let client_name = normalize_required_field(&payload.client_name, "Nome do cliente")?;
+  let raw_document = normalize_required_field(&payload.client_document, "CPF/CNPJ")?;
+  let client_document = only_digits(&raw_document);
+  if client_document.len() == 11 {
+    if !is_valid_cpf(&client_document) {
+      return Err(AppError::new("validation_error", "CPF inválido."));
+    }
+  } else if client_document.len() == 14 {
+    if !is_valid_cnpj(&client_document) {
+      return Err(AppError::new("validation_error", "CNPJ inválido."));
+    }
+  } else {
+    return Err(AppError::new("validation_error", "CPF/CNPJ inválido."));
+  }
+
+  let title = normalize_required_field(&payload.title, "Assunto")?;
+  let attendance_date = normalize_required_field(&payload.attendance_date, "Data do atendimento")?;
+  let history = normalize_required_field(&payload.history, "Histórico")?;
+  let analysis = normalize_required_field(&payload.analysis, "Análise")?;
+  let conclusion = normalize_required_field(&payload.conclusion, "Conclusão")?;
+  let client_email = normalize_optional_field(payload.client_email);
+  let client_phone = normalize_optional_field(payload.client_phone);
+
+  let appointment_id = Uuid::new_v4().to_string();
+  let now = now_iso();
+
+  conn.execute(
+    "INSERT INTO APPOINTMENTS (id, client_name, client_document, client_email, client_phone, title, attendance_date, history, analysis, conclusion, created_at, updated_at)
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+    params![
+      appointment_id,
+      client_name,
+      client_document,
+      client_email,
+      client_phone,
+      title,
+      attendance_date,
+      history,
+      analysis,
+      conclusion,
+#[tauri::command]
+fn attendances_list(
+  app: AppHandle,
+  state: State<'_, AppState>,
+  session_id: String,
+  client_id: String,
+) -> AppResult<Vec<AttendanceSummary>> {
+  let path = db_path(&app, &state)?;
+  let conn = open_connection(&path)?;
+  run_migrations(&conn)?;
+  require_admin_session(&conn, &session_id)?;
+  ensure_client_exists(&conn, &client_id)?;
+
+  let mut stmt = conn.prepare(
+    "SELECT id, client_id, occurred_at, channel, subject, notes, created_at, updated_at
+     FROM ATTENDANCES WHERE client_id = ?1 ORDER BY occurred_at DESC",
+  )?;
+  let rows = stmt.query_map(params![client_id], |row| {
+    Ok(AttendanceSummary {
+      id: row.get(0)?,
+      client_id: row.get(1)?,
+      occurred_at: row.get(2)?,
+      channel: row.get(3)?,
+      subject: row.get(4)?,
+      notes: row.get(5)?,
+      created_at: row.get(6)?,
+      updated_at: row.get(7)?,
+    })
+  })?;
+
+  let mut attendances = Vec::new();
+  for row in rows {
+    attendances.push(row?);
+  }
+  Ok(attendances)
+}
+
+#[tauri::command]
+fn attendances_create(
+  app: AppHandle,
+  state: State<'_, AppState>,
+  session_id: String,
+  client_id: String,
+  payload: CreateAttendancePayload,
+) -> AppResult<AttendanceDetail> {
+  let path = db_path(&app, &state)?;
+  let conn = open_connection(&path)?;
+  run_migrations(&conn)?;
+  let admin = require_admin_session(&conn, &session_id)?;
+  ensure_client_exists(&conn, &client_id)?;
+
+  let occurred_at = payload.occurred_at.trim().to_string();
+  let channel = normalize_attendance_channel(&payload.channel);
+  let subject = payload.subject.trim().to_string();
+  let notes = payload.notes.trim().to_string();
+  validate_attendance_payload(&occurred_at, &channel, &subject, &notes)?;
+
+  let attendance_id = Uuid::new_v4().to_string();
+  let now = now_iso();
+
+  conn.execute(
+    "INSERT INTO ATTENDANCES (id, client_id, occurred_at, channel, subject, notes, created_at, updated_at)
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+    params![
+      attendance_id,
+      client_id,
+      occurred_at,
+      channel,
+      subject,
+      notes,
       now,
       now
     ],
@@ -2187,6 +2774,36 @@ fn cases_create(
     phase,
     value_amount: payload.value_amount,
     documents_path,
+    &session.user_id,
+    "create_appointment",
+    Some("APPOINTMENT"),
+    Some(&appointment_id),
+    &admin.id,
+    "create_attendance",
+    Some("ATTENDANCE"),
+    Some(&attendance_id),
+    Some("Atendimento criado"),
+    None,
+  )?;
+
+  Ok(AppointmentDetail {
+    id: appointment_id,
+    client_name,
+    client_document,
+    client_email,
+    client_phone,
+    title,
+    attendance_date,
+    history,
+    analysis,
+    conclusion,
+  Ok(AttendanceDetail {
+    id: attendance_id,
+    client_id,
+    occurred_at,
+    channel,
+    subject,
+    notes,
     created_at: now.clone(),
     updated_at: now,
   })
@@ -2194,12 +2811,106 @@ fn cases_create(
 
 #[tauri::command]
 fn cases_update(
+fn documents_generate_html(
+  app: AppHandle,
+  state: State<'_, AppState>,
+  session_id: String,
+  payload: DocumentGeneratePayload,
+) -> AppResult<DocumentHtmlResponse> {
+  let path = db_path(&app, &state)?;
+  let conn = open_connection(&path)?;
+  run_migrations(&conn)?;
+  let session = require_active_session(&conn, &session_id)?;
+
+  let document_type = normalize_document_type(&payload.document_type);
+  if document_type != "RELATORIO" && document_type != "PARECER" {
+    return Err(AppError::new("validation_error", "Tipo de documento inválido."));
+  }
+  let validated_payload = DocumentGeneratePayload {
+    document_type,
+    office_name: normalize_required_field(&payload.office_name, "Nome do escritório")?,
+    generated_at: normalize_required_field(&payload.generated_at, "Data")?,
+    client_name: normalize_required_field(&payload.client_name, "Nome do cliente")?,
+    client_document: normalize_required_field(&payload.client_document, "CPF/CNPJ")?,
+    client_email: normalize_optional_field(payload.client_email),
+    client_phone: normalize_optional_field(payload.client_phone),
+    title: normalize_required_field(&payload.title, "Assunto")?,
+    attendance_date: normalize_required_field(&payload.attendance_date, "Data do atendimento")?,
+    history: normalize_required_field(&payload.history, "Histórico")?,
+    analysis: normalize_required_field(&payload.analysis, "Análise")?,
+    conclusion: normalize_required_field(&payload.conclusion, "Conclusão")?,
+    appointment_id: payload.appointment_id,
+  };
+
+  let html = build_document_html(&validated_payload);
+  let metadata = serde_json::json!({
+    "documentType": validated_payload.document_type,
+    "appointmentId": validated_payload.appointment_id
+  });
+
+  insert_audit_log(
+    &conn,
+    &session.user_id,
+    "document_generate",
+    Some("DOCUMENT"),
+    validated_payload.appointment_id.as_deref(),
+    Some("Documento gerado"),
+    Some(&metadata.to_string()),
+  )?;
+
+  Ok(DocumentHtmlResponse { html })
+}
+
+#[tauri::command]
+fn documents_export_html(
+  app: AppHandle,
+  state: State<'_, AppState>,
+  session_id: String,
+  payload: DocumentExportHtmlPayload,
+) -> AppResult<()> {
+  let path = db_path(&app, &state)?;
+  let conn = open_connection(&path)?;
+  run_migrations(&conn)?;
+  let session = require_active_session(&conn, &session_id)?;
+
+  let file_path = normalize_required_field(&payload.file_path, "Caminho do arquivo")?;
+  fs::write(&file_path, payload.html)?;
+
+  let metadata = serde_json::json!({
+    "documentType": normalize_document_type(&payload.document_type),
+    "appointmentId": payload.appointment_id,
+    "format": "HTML",
+    "filePath": file_path
+  });
+
+  insert_audit_log(
+    &conn,
+    &session.user_id,
+    "document_export",
+    Some("DOCUMENT"),
+    payload.appointment_id.as_deref(),
+    Some("Documento exportado"),
+    Some(&metadata.to_string()),
+  )?;
+
+  Ok(())
+}
+
+#[tauri::command]
+fn documents_log_export(
+  app: AppHandle,
+  state: State<'_, AppState>,
+  session_id: String,
+  payload: DocumentLogExportPayload,
+fn attendances_update(
   app: AppHandle,
   state: State<'_, AppState>,
   session_id: String,
   id: String,
   payload: UpdateCasePayload,
 ) -> AppResult<CaseDetail> {
+  payload: UpdateAttendancePayload,
+) -> AppResult<AttendanceDetail> {
   let path = db_path(&app, &state)?;
   let conn = open_connection(&path)?;
   run_migrations(&conn)?;
@@ -2208,6 +2919,7 @@ fn cases_update(
   let existing: Option<(String, String)> = conn
     .query_row(
       "SELECT client_id, created_at FROM CASES WHERE id = ?1",
+      "SELECT client_id, created_at FROM ATTENDANCES WHERE id = ?1",
       params![id.clone()],
       |row| Ok((row.get(0)?, row.get(1)?)),
     )
@@ -2264,6 +2976,20 @@ fn cases_update(
       now,
       id.clone()
     ],
+    None => return Err(AppError::new("not_found", "Atendimento não encontrado.")),
+  };
+
+  let occurred_at = payload.occurred_at.trim().to_string();
+  let channel = normalize_attendance_channel(&payload.channel);
+  let subject = payload.subject.trim().to_string();
+  let notes = payload.notes.trim().to_string();
+  validate_attendance_payload(&occurred_at, &channel, &subject, &notes)?;
+
+  let now = now_iso();
+  conn.execute(
+    "UPDATE ATTENDANCES SET occurred_at = ?1, channel = ?2, subject = ?3, notes = ?4, updated_at = ?5
+     WHERE id = ?6",
+    params![occurred_at, channel, subject, notes, now, id.clone()],
   )?;
 
   insert_audit_log(
@@ -2291,9 +3017,77 @@ fn cases_update(
     phase,
     value_amount: payload.value_amount,
     documents_path,
+    "update_attendance",
+    Some("ATTENDANCE"),
+    Some(&id),
+    Some("Atendimento atualizado"),
+    None,
+  )?;
+
+  Ok(AttendanceDetail {
+    id,
+    client_id,
+    occurred_at,
+    channel,
+    subject,
+    notes,
     created_at,
     updated_at: now,
   })
+}
+
+#[tauri::command]
+fn attendances_delete(
+  app: AppHandle,
+  state: State<'_, AppState>,
+  session_id: String,
+  id: String,
+) -> AppResult<()> {
+  let path = db_path(&app, &state)?;
+  let conn = open_connection(&path)?;
+  run_migrations(&conn)?;
+  let session = require_active_session(&conn, &session_id)?;
+
+  let metadata = serde_json::json!({
+    "documentType": normalize_document_type(&payload.document_type),
+    "appointmentId": payload.appointment_id,
+    "format": payload.format.trim().to_uppercase()
+  });
+
+  insert_audit_log(
+    &conn,
+    &session.user_id,
+    "document_export",
+    Some("DOCUMENT"),
+    payload.appointment_id.as_deref(),
+    Some("Documento exportado"),
+    Some(&metadata.to_string()),
+  let admin = require_admin_session(&conn, &session_id)?;
+
+  let existing: Option<String> = conn
+    .query_row(
+      "SELECT id FROM ATTENDANCES WHERE id = ?1",
+      params![id.clone()],
+      |row| row.get(0),
+    )
+    .optional()?;
+  if existing.is_none() {
+    return Err(AppError::new("not_found", "Atendimento não encontrado."));
+  }
+
+  conn.execute("DELETE FROM ATTENDANCES WHERE id = ?1", params![id.clone()])?;
+
+  insert_audit_log(
+    &conn,
+    &admin.id,
+    "delete_attendance",
+    Some("ATTENDANCE"),
+    Some(&id),
+    Some("Atendimento removido"),
+    None,
+  )?;
+
+  Ok(())
 }
 
 fn main() {
@@ -2333,6 +3127,16 @@ fn main() {
       cases_get,
       cases_create,
       cases_update
+      appointments_list,
+      appointments_get,
+      appointments_create,
+      documents_generate_html,
+      documents_export_html,
+      documents_log_export
+      attendances_list,
+      attendances_create,
+      attendances_update,
+      attendances_delete
     ])
     .run(tauri::generate_context!())
     .expect("error while running tauri application");

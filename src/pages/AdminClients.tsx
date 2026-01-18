@@ -22,6 +22,7 @@ import {
   Typography
 } from '@mui/material';
 import { useNavigate } from 'react-router-dom';
+import { Link } from 'react-router-dom';
 import { useAuth } from '../state/auth';
 import {
   clientsArchive,
@@ -334,6 +335,10 @@ const AdminClients = () => {
                       onClick={() => navigate(`/admin/clients/${client.id}`)}
                     >
                       Processos
+                      component={Link}
+                      to={`/clients/${client.id}`}
+                    >
+                      Atendimentos
                     </Button>
                     <Button size="small" variant="outlined" onClick={() => openEditForm(client)}>
                       Editar
