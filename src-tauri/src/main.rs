@@ -52,6 +52,12 @@ impl From<argon2::password_hash::Error> for AppError {
   }
 }
 
+impl From<std::io::Error> for AppError {
+  fn from(err: std::io::Error) -> Self {
+    AppError::new("io_error", err.to_string())
+  }
+}
+
 #[derive(Default)]
 struct AppState {
   db_path: Mutex<Option<PathBuf>>,
@@ -133,6 +139,85 @@ struct Team {
 
 #[derive(Debug, Serialize, Deserialize, Clone, Copy)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+enum ClientType {
+  Pf,
+  Pj,
+}
+
+impl ClientType {
+  fn as_str(&self) -> &'static str {
+    match self {
+      ClientType::Pf => "PF",
+      ClientType::Pj => "PJ",
+    }
+  }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Copy)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+enum ClientStatus {
+  Active,
+  Archived,
+}
+
+impl ClientStatus {
+  fn as_str(&self) -> &'static str {
+    match self {
+      ClientStatus::Active => "ACTIVE",
+      ClientStatus::Archived => "ARCHIVED",
+    }
+  }
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ClientSummary {
+  id: String,
+  r#type: ClientType,
+  name: String,
+  cpf_cnpj: String,
+  status: ClientStatus,
+  created_at: String,
+  updated_at: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ClientDetail {
+  id: String,
+  r#type: ClientType,
+  name: String,
+  cpf_cnpj: String,
+  status: ClientStatus,
+  email: Option<String>,
+  phone: Option<String>,
+  notes: Option<String>,
+  created_at: String,
+  updated_at: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ClientsListFilters {
+  q: Option<String>,
+  #[serde(rename = "type")]
+  r#type: Option<ClientType>,
+  status: Option<ClientStatus>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ClientPayload {
+  r#type: ClientType,
+  name: String,
+  cpf_cnpj: String,
+  email: Option<String>,
+  phone: Option<String>,
+  notes: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Copy)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 enum AttendanceChannel {
   Presencial,
   Whatsapp,
@@ -186,6 +271,54 @@ struct AttendancePayload {
   channel: AttendanceChannel,
   subject: String,
   notes: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DocumentHtmlResponse {
+  html: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Copy)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+enum DocumentType {
+  Relatorio,
+  Parecer,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DocumentGeneratePayload {
+  document_type: DocumentType,
+  office_name: String,
+  generated_at: String,
+  client_name: String,
+  client_document: String,
+  client_email: Option<String>,
+  client_phone: Option<String>,
+  title: String,
+  attendance_date: String,
+  history: String,
+  analysis: String,
+  conclusion: String,
+  appointment_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DocumentExportHtmlPayload {
+  html: String,
+  file_path: String,
+  document_type: DocumentType,
+  appointment_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DocumentLogExportPayload {
+  document_type: DocumentType,
+  appointment_id: Option<String>,
+  format: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -505,6 +638,28 @@ fn ensure_client_exists(conn: &Connection, client_id: &str) -> AppResult<()> {
   Ok(())
 }
 
+fn parse_client_type(value: &str) -> AppResult<ClientType> {
+  match value {
+    "PF" => Ok(ClientType::Pf),
+    "PJ" => Ok(ClientType::Pj),
+    _ => Err(AppError::new(
+      "validation_failed",
+      "Tipo de cliente inválido.",
+    )),
+  }
+}
+
+fn parse_client_status(value: &str) -> AppResult<ClientStatus> {
+  match value {
+    "ACTIVE" => Ok(ClientStatus::Active),
+    "ARCHIVED" => Ok(ClientStatus::Archived),
+    _ => Err(AppError::new(
+      "validation_failed",
+      "Status de cliente inválido.",
+    )),
+  }
+}
+
 fn parse_attendance_channel(value: &str) -> AppResult<AttendanceChannel> {
   match value {
     "PRESENCIAL" => Ok(AttendanceChannel::Presencial),
@@ -517,6 +672,41 @@ fn parse_attendance_channel(value: &str) -> AppResult<AttendanceChannel> {
       "Canal inválido para atendimento.",
     )),
   }
+}
+
+fn normalize_optional_text(value: Option<String>) -> Option<String> {
+  value.and_then(|text| {
+    let trimmed = text.trim().to_string();
+    if trimmed.is_empty() {
+      None
+    } else {
+      Some(trimmed)
+    }
+  })
+}
+
+fn validate_client_payload(payload: &ClientPayload) -> AppResult<(ClientType, String, String, Option<String>, Option<String>, Option<String>)> {
+  let name = payload.name.trim().to_string();
+  if name.is_empty() {
+    return Err(AppError::new("validation_failed", "Nome é obrigatório."));
+  }
+
+  let cpf_cnpj = payload.cpf_cnpj.trim().to_string();
+  if cpf_cnpj.is_empty() {
+    return Err(AppError::new(
+      "validation_failed",
+      "CPF/CNPJ é obrigatório.",
+    ));
+  }
+
+  Ok((
+    payload.r#type,
+    name,
+    cpf_cnpj,
+    normalize_optional_text(payload.email.clone()),
+    normalize_optional_text(payload.phone.clone()),
+    normalize_optional_text(payload.notes.clone()),
+  ))
 }
 
 fn validate_attendance_payload(
@@ -1534,6 +1724,381 @@ fn teams_delete_or_archive(
 }
 
 #[tauri::command]
+fn clients_list(
+  app: AppHandle,
+  state: State<'_, AppState>,
+  session_id: String,
+  filters: ClientsListFilters,
+) -> AppResult<Vec<ClientSummary>> {
+  let path = db_path(&app, &state)?;
+  let conn = open_connection(&path)?;
+  run_migrations(&conn)?;
+  require_active_session(&conn, &session_id)?;
+
+  let mut sql = String::from(
+    "SELECT id, type, name, cpf_cnpj, status, created_at, updated_at FROM CLIENTS WHERE 1=1",
+  );
+  let mut params: Vec<String> = Vec::new();
+
+  if let Some(q) = filters.q {
+    let needle = format!("%{}%", q.trim());
+    sql.push_str(" AND (name LIKE ? OR cpf_cnpj LIKE ?)");
+    params.push(needle.clone());
+    params.push(needle);
+  }
+
+  if let Some(client_type) = filters.r#type {
+    sql.push_str(" AND type = ?");
+    params.push(client_type.as_str().to_string());
+  }
+
+  if let Some(status) = filters.status {
+    sql.push_str(" AND status = ?");
+    params.push(status.as_str().to_string());
+  }
+
+  sql.push_str(" ORDER BY name ASC");
+
+  let mut stmt = conn.prepare(&sql)?;
+  let rows = stmt.query_map(params_from_iter(params.iter()), |row| {
+    let client_type: String = row.get(1)?;
+    let status: String = row.get(4)?;
+    Ok(ClientSummary {
+      id: row.get(0)?,
+      r#type: parse_client_type(client_type.trim())?,
+      name: row.get(2)?,
+      cpf_cnpj: row.get(3)?,
+      status: parse_client_status(status.trim())?,
+      created_at: row.get(5)?,
+      updated_at: row.get(6)?,
+    })
+  })?;
+
+  let mut clients = Vec::new();
+  for row in rows {
+    clients.push(row?);
+  }
+
+  Ok(clients)
+}
+
+#[tauri::command]
+fn clients_get(
+  app: AppHandle,
+  state: State<'_, AppState>,
+  session_id: String,
+  id: String,
+) -> AppResult<ClientDetail> {
+  let path = db_path(&app, &state)?;
+  let conn = open_connection(&path)?;
+  run_migrations(&conn)?;
+  require_active_session(&conn, &session_id)?;
+
+  let mut stmt = conn.prepare(
+    "SELECT id, type, name, cpf_cnpj, status, email, phone, notes, created_at, updated_at
+     FROM CLIENTS WHERE id = ?1",
+  )?;
+  let client = stmt.query_row(params![id], |row| {
+    let client_type: String = row.get(1)?;
+    let status: String = row.get(4)?;
+    Ok(ClientDetail {
+      id: row.get(0)?,
+      r#type: parse_client_type(client_type.trim())?,
+      name: row.get(2)?,
+      cpf_cnpj: row.get(3)?,
+      status: parse_client_status(status.trim())?,
+      email: row.get(5)?,
+      phone: row.get(6)?,
+      notes: row.get(7)?,
+      created_at: row.get(8)?,
+      updated_at: row.get(9)?,
+    })
+  });
+
+  match client {
+    Ok(client) => Ok(client),
+    Err(rusqlite::Error::QueryReturnedNoRows) => {
+      Err(AppError::new("client_not_found", "Cliente não encontrado."))
+    }
+    Err(err) => Err(err.into()),
+  }
+}
+
+#[tauri::command]
+fn clients_create(
+  app: AppHandle,
+  state: State<'_, AppState>,
+  session_id: String,
+  payload: ClientPayload,
+) -> AppResult<ClientDetail> {
+  let path = db_path(&app, &state)?;
+  let conn = open_connection(&path)?;
+  run_migrations(&conn)?;
+  let user = require_active_session(&conn, &session_id)?;
+
+  let (client_type, name, cpf_cnpj, email, phone, notes) = validate_client_payload(&payload)?;
+  let now = now_iso();
+  let id = Uuid::new_v4().to_string();
+  let status = ClientStatus::Active;
+
+  if let Err(err) = conn.execute(
+    "INSERT INTO CLIENTS (id, type, name, cpf_cnpj, status, email, phone, notes, created_at, updated_at)
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+    params![
+      id,
+      client_type.as_str(),
+      name,
+      cpf_cnpj,
+      status.as_str(),
+      email,
+      phone,
+      notes,
+      now,
+      now
+    ],
+  ) {
+    return Err(handle_constraint_error(err));
+  }
+
+  insert_audit_log(
+    &conn,
+    &user.user_id,
+    "create_client",
+    Some("CLIENT"),
+    Some(&id),
+    Some("Cliente criado"),
+    None,
+  )?;
+
+  Ok(ClientDetail {
+    id,
+    r#type: client_type,
+    name,
+    cpf_cnpj,
+    status,
+    email,
+    phone,
+    notes,
+    created_at: now.clone(),
+    updated_at: now,
+  })
+}
+
+#[tauri::command]
+fn clients_update(
+  app: AppHandle,
+  state: State<'_, AppState>,
+  session_id: String,
+  id: String,
+  payload: ClientPayload,
+) -> AppResult<ClientDetail> {
+  let path = db_path(&app, &state)?;
+  let conn = open_connection(&path)?;
+  run_migrations(&conn)?;
+  let user = require_active_session(&conn, &session_id)?;
+  ensure_client_exists(&conn, &id)?;
+
+  let (client_type, name, cpf_cnpj, email, phone, notes) = validate_client_payload(&payload)?;
+  let now = now_iso();
+
+  if let Err(err) = conn.execute(
+    "UPDATE CLIENTS
+     SET type = ?1, name = ?2, cpf_cnpj = ?3, email = ?4, phone = ?5, notes = ?6, updated_at = ?7
+     WHERE id = ?8",
+    params![
+      client_type.as_str(),
+      name,
+      cpf_cnpj,
+      email,
+      phone,
+      notes,
+      now,
+      id
+    ],
+  ) {
+    return Err(handle_constraint_error(err));
+  }
+
+  let mut stmt = conn.prepare(
+    "SELECT status, created_at FROM CLIENTS WHERE id = ?1",
+  )?;
+  let (status_value, created_at) = stmt.query_row(params![id.clone()], |row| {
+    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+  })?;
+  let status = parse_client_status(status_value.trim())?;
+
+  insert_audit_log(
+    &conn,
+    &user.user_id,
+    "update_client",
+    Some("CLIENT"),
+    Some(&id),
+    Some("Cliente atualizado"),
+    None,
+  )?;
+
+  Ok(ClientDetail {
+    id,
+    r#type: client_type,
+    name,
+    cpf_cnpj,
+    status,
+    email,
+    phone,
+    notes,
+    created_at,
+    updated_at: now,
+  })
+}
+
+#[tauri::command]
+fn clients_archive(
+  app: AppHandle,
+  state: State<'_, AppState>,
+  session_id: String,
+  id: String,
+) -> AppResult<()> {
+  let path = db_path(&app, &state)?;
+  let conn = open_connection(&path)?;
+  run_migrations(&conn)?;
+  let user = require_active_session(&conn, &session_id)?;
+  ensure_client_exists(&conn, &id)?;
+
+  let now = now_iso();
+  conn.execute(
+    "UPDATE CLIENTS SET status = ?1, updated_at = ?2 WHERE id = ?3",
+    params![ClientStatus::Archived.as_str(), now, id],
+  )?;
+
+  insert_audit_log(
+    &conn,
+    &user.user_id,
+    "archive_client",
+    Some("CLIENT"),
+    Some(&id),
+    Some("Cliente arquivado"),
+    None,
+  )?;
+
+  Ok(())
+}
+
+#[tauri::command]
+fn documents_generate_html(
+  app: AppHandle,
+  state: State<'_, AppState>,
+  session_id: String,
+  payload: DocumentGeneratePayload,
+) -> AppResult<DocumentHtmlResponse> {
+  let path = db_path(&app, &state)?;
+  let conn = open_connection(&path)?;
+  run_migrations(&conn)?;
+  let user = require_active_session(&conn, &session_id)?;
+
+  let html = format!(
+    "<!doctype html>
+<html lang=\"pt-BR\">
+<head>
+  <meta charset=\"utf-8\" />
+  <title>{}</title>
+  <style>
+    body {{ font-family: Arial, sans-serif; margin: 40px; color: #111; }}
+    h1 {{ font-size: 22px; margin-bottom: 4px; }}
+    h2 {{ font-size: 16px; margin-top: 24px; }}
+    .meta {{ color: #555; font-size: 12px; }}
+    .section {{ margin-top: 16px; white-space: pre-wrap; }}
+  </style>
+</head>
+<body>
+  <h1>{}</h1>
+  <div class=\"meta\">{}</div>
+  <div class=\"meta\">Cliente: {} ({})</div>
+  <div class=\"meta\">Data do atendimento: {}</div>
+  <h2>Histórico</h2>
+  <div class=\"section\">{}</div>
+  <h2>Análise</h2>
+  <div class=\"section\">{}</div>
+  <h2>Conclusão</h2>
+  <div class=\"section\">{}</div>
+</body>
+</html>",
+    payload.title,
+    payload.title,
+    payload.generated_at,
+    payload.client_name,
+    payload.client_document,
+    payload.attendance_date,
+    payload.history,
+    payload.analysis,
+    payload.conclusion
+  );
+
+  insert_audit_log(
+    &conn,
+    &user.user_id,
+    "generate_document_html",
+    Some("DOCUMENT"),
+    payload.appointment_id.as_deref(),
+    Some("HTML gerado para documento"),
+    None,
+  )?;
+
+  Ok(DocumentHtmlResponse { html })
+}
+
+#[tauri::command]
+fn documents_export_html(
+  app: AppHandle,
+  state: State<'_, AppState>,
+  session_id: String,
+  payload: DocumentExportHtmlPayload,
+) -> AppResult<()> {
+  let path = db_path(&app, &state)?;
+  let conn = open_connection(&path)?;
+  run_migrations(&conn)?;
+  let user = require_active_session(&conn, &session_id)?;
+
+  fs::write(&payload.file_path, payload.html)?;
+
+  insert_audit_log(
+    &conn,
+    &user.user_id,
+    "export_document_html",
+    Some("DOCUMENT"),
+    payload.appointment_id.as_deref(),
+    Some("Documento exportado"),
+    None,
+  )?;
+
+  Ok(())
+}
+
+#[tauri::command]
+fn documents_log_export(
+  app: AppHandle,
+  state: State<'_, AppState>,
+  session_id: String,
+  payload: DocumentLogExportPayload,
+) -> AppResult<()> {
+  let path = db_path(&app, &state)?;
+  let conn = open_connection(&path)?;
+  run_migrations(&conn)?;
+  let user = require_active_session(&conn, &session_id)?;
+
+  insert_audit_log(
+    &conn,
+    &user.user_id,
+    "log_document_export",
+    Some("DOCUMENT"),
+    payload.appointment_id.as_deref(),
+    Some("Exportação registrada"),
+    Some(&payload.format),
+  )?;
+
+  Ok(())
+}
+
+#[tauri::command]
 fn attendances_list(
   app: AppHandle,
   state: State<'_, AppState>,
@@ -1758,6 +2323,14 @@ fn main() {
       teams_update,
       teams_set_members,
       teams_delete_or_archive,
+      clients_list,
+      clients_get,
+      clients_create,
+      clients_update,
+      clients_archive,
+      documents_generate_html,
+      documents_export_html,
+      documents_log_export,
       attendances_list,
       attendances_create,
       attendances_update,
