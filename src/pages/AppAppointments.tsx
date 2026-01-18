@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { save } from '@tauri-apps/api/dialog';
 import {
   Alert,
   Box,
@@ -29,6 +30,8 @@ import type {
   AttendanceSummary
 } from '../api/attendances';
 import { clientsList, type ClientSummary } from '../api/clients';
+import { documentsExportHtml, documentsGenerateHtml } from '../api/documents';
+import type { DocumentHtmlResponse, DocumentType } from '../api/documents';
 import { getErrorMessage } from '../api/errors';
 import { t } from '../i18n';
 import { useAuth } from '../state/auth';
@@ -44,6 +47,17 @@ type AttendanceFormState = {
   channel: AttendanceChannel | '';
   subject: string;
   notes: string;
+};
+
+type DocumentFormState = {
+  attendanceId: string;
+  attendanceDate: string;
+  documentType: DocumentType;
+  officeName: string;
+  title: string;
+  history: string;
+  analysis: string;
+  conclusion: string;
 };
 
 const channelOptions: AttendanceChannel[] = [
@@ -102,8 +116,17 @@ const AppAppointments = () => {
     notes: ''
   });
   const [deleteTarget, setDeleteTarget] = useState<AttendanceSummary | null>(null);
+  const [isDocumentDialogOpen, setIsDocumentDialogOpen] = useState(false);
+  const [documentForm, setDocumentForm] = useState<DocumentFormState | null>(null);
+  const [documentPreview, setDocumentPreview] = useState<DocumentHtmlResponse | null>(null);
+  const [isDocumentGenerating, setIsDocumentGenerating] = useState(false);
+  const [isDocumentExporting, setIsDocumentExporting] = useState(false);
 
   const canFetch = useMemo(() => !!sessionId, [sessionId]);
+  const selectedClient = useMemo(
+    () => clients.find((client) => client.id === selectedClientId) || null,
+    [clients, selectedClientId]
+  );
 
   const loadClients = async () => {
     if (!sessionId) return;
@@ -175,6 +198,93 @@ const AppAppointments = () => {
       notes: attendance.notes
     });
     setIsFormOpen(true);
+  };
+
+  const openDocumentDialog = (attendance: AttendanceSummary) => {
+    if (!selectedClient) {
+      setToast({ message: 'Selecione um cliente antes de gerar documento.', severity: 'warning' });
+      return;
+    }
+    setDocumentForm({
+      attendanceId: attendance.id,
+      attendanceDate: formatDateTime(attendance.occurredAt),
+      documentType: 'RELATORIO',
+      officeName: '',
+      title: attendance.subject,
+      history: attendance.notes,
+      analysis: '',
+      conclusion: ''
+    });
+    setDocumentPreview(null);
+    setIsDocumentDialogOpen(true);
+  };
+
+  const handleGenerateDocument = async () => {
+    if (!sessionId || !documentForm || !selectedClient) return;
+    if (!documentForm.officeName.trim()) {
+      setToast({ message: 'Informe o nome do escritório.', severity: 'error' });
+      return;
+    }
+    if (!documentForm.title.trim()) {
+      setToast({ message: 'Informe o título do documento.', severity: 'error' });
+      return;
+    }
+    setIsDocumentGenerating(true);
+    try {
+      const response = await documentsGenerateHtml(sessionId, {
+        documentType: documentForm.documentType,
+        officeName: documentForm.officeName.trim(),
+        generatedAt: new Date().toLocaleString('pt-BR'),
+        clientId: selectedClient.id,
+        clientName: selectedClient.name,
+        clientDocument: selectedClient.cpfCnpj,
+        title: documentForm.title.trim(),
+        attendanceDate: documentForm.attendanceDate,
+        history: documentForm.history.trim(),
+        analysis: documentForm.analysis.trim(),
+        conclusion: documentForm.conclusion.trim(),
+        appointmentId: documentForm.attendanceId
+      });
+      setDocumentPreview(response);
+      setToast({ message: 'Documento gerado com assinatura.', severity: 'success' });
+    } catch (err) {
+      setToast({ message: getErrorMessage(err, t('appointments.toast.generateError')), severity: 'error' });
+    } finally {
+      setIsDocumentGenerating(false);
+    }
+  };
+
+  const handleCopyDocumentHash = () => {
+    if (!documentPreview?.documentHash) return;
+    if (navigator.clipboard?.writeText) {
+      void navigator.clipboard.writeText(documentPreview.documentHash);
+      setToast({ message: 'Hash copiado para a área de transferência.', severity: 'success' });
+    } else {
+      setToast({ message: 'Não foi possível copiar o hash.', severity: 'warning' });
+    }
+  };
+
+  const handleExportDocument = async () => {
+    if (!sessionId || !documentPreview || !documentForm) return;
+    setIsDocumentExporting(true);
+    try {
+      const filePath = await save({
+        defaultPath: `documento-${documentPreview.documentId}.html`,
+        filters: [{ name: 'HTML', extensions: ['html'] }]
+      });
+      if (!filePath) return;
+      await documentsExportHtml(sessionId, {
+        documentId: documentPreview.documentId,
+        filePath,
+        documentType: documentForm.documentType,
+        appointmentId: documentForm.attendanceId
+      });
+      setToast({ message: 'Documento exportado com sucesso.', severity: 'success' });
+    } catch (err) {
+      setToast({ message: 'Falha ao exportar documento.', severity: 'error' });
+    } finally {
+      setIsDocumentExporting(false);
+    }
   };
 
   const handleSaveAttendance = async () => {
@@ -290,6 +400,13 @@ const AppAppointments = () => {
                     <Button
                       size="small"
                       variant="outlined"
+                      onClick={() => openDocumentDialog(attendance)}
+                    >
+                      Gerar documento
+                    </Button>
+                    <Button
+                      size="small"
+                      variant="outlined"
                       onClick={() => openEditForm(attendance)}
                     >
                       {t('common.edit')}
@@ -376,6 +493,138 @@ const AppAppointments = () => {
           <Button onClick={() => setIsFormOpen(false)}>{t('common.cancel')}</Button>
           <Button variant="contained" onClick={handleSaveAttendance}>
             {t('common.save')}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog
+        open={isDocumentDialogOpen}
+        onClose={() => setIsDocumentDialogOpen(false)}
+        fullWidth
+        maxWidth="md"
+      >
+        <DialogTitle>Gerar documento</DialogTitle>
+        <DialogContent>
+          {documentForm && (
+            <Stack spacing={2} mt={1}>
+              <FormControl fullWidth>
+                <InputLabel>Tipo</InputLabel>
+                <Select
+                  label="Tipo"
+                  value={documentForm.documentType}
+                  onChange={(event) =>
+                    setDocumentForm((prev) =>
+                      prev
+                        ? {
+                            ...prev,
+                            documentType: event.target.value as DocumentType
+                          }
+                        : prev
+                    )
+                  }
+                >
+                  <MenuItem value="RELATORIO">Relatório</MenuItem>
+                  <MenuItem value="PARECER">Parecer</MenuItem>
+                </Select>
+              </FormControl>
+              <TextField
+                label="Escritório"
+                value={documentForm.officeName}
+                onChange={(event) =>
+                  setDocumentForm((prev) =>
+                    prev ? { ...prev, officeName: event.target.value } : prev
+                  )
+                }
+                fullWidth
+              />
+              <TextField
+                label="Título"
+                value={documentForm.title}
+                onChange={(event) =>
+                  setDocumentForm((prev) =>
+                    prev ? { ...prev, title: event.target.value } : prev
+                  )
+                }
+                fullWidth
+              />
+              <TextField
+                label="Histórico"
+                value={documentForm.history}
+                onChange={(event) =>
+                  setDocumentForm((prev) =>
+                    prev ? { ...prev, history: event.target.value } : prev
+                  )
+                }
+                fullWidth
+                multiline
+                minRows={3}
+              />
+              <TextField
+                label="Análise"
+                value={documentForm.analysis}
+                onChange={(event) =>
+                  setDocumentForm((prev) =>
+                    prev ? { ...prev, analysis: event.target.value } : prev
+                  )
+                }
+                fullWidth
+                multiline
+                minRows={3}
+              />
+              <TextField
+                label="Conclusão"
+                value={documentForm.conclusion}
+                onChange={(event) =>
+                  setDocumentForm((prev) =>
+                    prev ? { ...prev, conclusion: event.target.value } : prev
+                  )
+                }
+                fullWidth
+                multiline
+                minRows={3}
+              />
+            </Stack>
+          )}
+
+          {documentPreview && (
+            <Box mt={3}>
+              <Typography variant="subtitle1" gutterBottom>
+                Documento assinado
+              </Typography>
+              <Typography variant="body2" gutterBottom>
+                Assinado por: {documentPreview.authoredByName}
+                {documentPreview.authoredByOab ? ` (${documentPreview.authoredByOab})` : ''}
+              </Typography>
+              <Stack direction="row" spacing={1} alignItems="center">
+                <Typography variant="body2">Hash do documento:</Typography>
+                <Typography variant="body2" sx={{ fontFamily: 'monospace' }}>
+                  {documentPreview.documentHash}
+                </Typography>
+                <Button size="small" onClick={handleCopyDocumentHash}>
+                  Copiar
+                </Button>
+              </Stack>
+              <Box mt={2} sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 1 }}>
+                <iframe
+                  title={t('appointments.preview.iframeTitle')}
+                  srcDoc={documentPreview.html}
+                  style={{ width: '100%', height: 360, border: 'none' }}
+                />
+              </Box>
+            </Box>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setIsDocumentDialogOpen(false)}>{t('common.cancel')}</Button>
+          <Button variant="outlined" onClick={handleGenerateDocument} disabled={isDocumentGenerating}>
+            {isDocumentGenerating ? 'Gerando...' : 'Gerar assinatura'}
+          </Button>
+          <Button
+            variant="contained"
+            onClick={handleExportDocument}
+            disabled={!documentPreview || isDocumentExporting}
+          >
+            {isDocumentExporting ? 'Exportando...' : 'Exportar'}
           </Button>
         </DialogActions>
       </Dialog>

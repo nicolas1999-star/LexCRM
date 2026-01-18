@@ -6,6 +6,7 @@ export type DocumentGeneratePayload = {
   documentType: DocumentType;
   officeName: string;
   generatedAt: string;
+  clientId: string;
   clientName: string;
   clientDocument: string;
   clientEmail?: string;
@@ -20,17 +21,28 @@ export type DocumentGeneratePayload = {
 
 export type DocumentHtmlResponse = {
   html: string;
+  documentId: string;
+  documentHash: string;
+  contentHash: string;
+  createdAt: string;
+  authoredByName: string;
+  authoredByOab?: string | null;
 };
 
 export type DocumentExportHtmlPayload = {
-  html: string;
   filePath: string;
-  documentType: DocumentType;
+  documentId: string;
+  documentType?: DocumentType;
   appointmentId?: string;
 };
 
+export type DocumentExportHtmlResponse = {
+  filePath: string;
+};
+
 export type DocumentLogExportPayload = {
-  documentType: DocumentType;
+  documentId: string;
+  documentType?: DocumentType;
   appointmentId?: string;
   format: string;
 };
@@ -45,6 +57,7 @@ export const documentsGenerateHtml = async (
       documentType: payload.documentType,
       officeName: payload.officeName,
       generatedAt: payload.generatedAt,
+      clientId: payload.clientId,
       clientName: payload.clientName,
       clientDocument: payload.clientDocument,
       clientEmail: payload.clientEmail,
@@ -62,12 +75,12 @@ export const documentsGenerateHtml = async (
 export const documentsExportHtml = async (
   sessionId: string,
   payload: DocumentExportHtmlPayload
-): Promise<void> => {
+): Promise<DocumentExportHtmlResponse> => {
   return invoke('documents_export_html', {
     sessionId,
     payload: {
-      html: payload.html,
       filePath: payload.filePath,
+      documentId: payload.documentId,
       documentType: payload.documentType,
       appointmentId: payload.appointmentId
     }
@@ -81,6 +94,7 @@ export const documentsLogExport = async (
   return invoke('documents_log_export', {
     sessionId,
     payload: {
+      documentId: payload.documentId,
       documentType: payload.documentType,
       appointmentId: payload.appointmentId,
       format: payload.format
