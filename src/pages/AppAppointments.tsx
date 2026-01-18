@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   Alert,
   Box,
@@ -7,6 +7,10 @@ import {
   DialogActions,
   DialogContent,
   DialogTitle,
+  FormControl,
+  InputLabel,
+  MenuItem,
+  Select,
   Snackbar,
   Stack,
   Table,
@@ -17,277 +21,217 @@ import {
   TextField,
   Typography
 } from '@mui/material';
-import { save } from '@tauri-apps/api/dialog';
-import { useAuth } from '../state/auth';
-import {
-  appointmentsCreate,
-  appointmentsGet,
-  appointmentsList,
-  type AppointmentDetail,
-  type AppointmentSummary,
-  type CreateAppointmentPayload
-} from '../api/appointments';
-import {
-  documentsExportHtml,
-  documentsGenerateHtml,
-  documentsLogExport,
-  type DocumentType
-} from '../api/documents';
+
+import { attendancesCreate, attendancesDelete, attendancesList, attendancesUpdate } from '../api/attendances';
+import type {
+  AttendanceChannel,
+  AttendancePayload,
+  AttendanceSummary
+} from '../api/attendances';
+import { clientsList, type ClientSummary } from '../api/clients';
 import { getErrorMessage } from '../api/errors';
 import { t } from '../i18n';
+import { useAuth } from '../state/auth';
 
 type ToastState = {
   message: string;
   severity: 'success' | 'error' | 'warning' | 'info';
 } | null;
 
-type AppointmentFormState = CreateAppointmentPayload;
-
-type PreviewState = {
-  html: string;
-  appointmentId?: string;
-  documentType: DocumentType;
-  clientName: string;
+type AttendanceFormState = {
+  id?: string;
+  occurredAt: string;
+  channel: AttendanceChannel | '';
+  subject: string;
+  notes: string;
 };
 
-const OFFICE_NAME = 'LexCRM Advocacia';
+const channelOptions: AttendanceChannel[] = [
+  'PRESENCIAL',
+  'WHATSAPP',
+  'TELEFONE',
+  'EMAIL',
+  'VIDEO'
+];
 
-const formatCpf = (digits: string) => {
-  const value = digits.slice(0, 11);
-  if (value.length <= 3) return value;
-  if (value.length <= 6) return `${value.slice(0, 3)}.${value.slice(3)}`;
-  if (value.length <= 9) return `${value.slice(0, 3)}.${value.slice(3, 6)}.${value.slice(6)}`;
-  return `${value.slice(0, 3)}.${value.slice(3, 6)}.${value.slice(6, 9)}-${value.slice(
-    9,
-    11
-  )}`;
+const channelLabels: Record<AttendanceChannel, string> = {
+  PRESENCIAL: t('attendance.channel.presencial'),
+  WHATSAPP: t('attendance.channel.whatsapp'),
+  TELEFONE: t('attendance.channel.telefone'),
+  EMAIL: t('attendance.channel.email'),
+  VIDEO: t('attendance.channel.video')
 };
 
-const formatCnpj = (digits: string) => {
-  const value = digits.slice(0, 14);
-  if (value.length <= 2) return value;
-  if (value.length <= 5) return `${value.slice(0, 2)}.${value.slice(2)}`;
-  if (value.length <= 8) return `${value.slice(0, 2)}.${value.slice(2, 5)}.${value.slice(5)}`;
-  if (value.length <= 12) {
-    return `${value.slice(0, 2)}.${value.slice(2, 5)}.${value.slice(5, 8)}/${value.slice(8)}`;
-  }
-  return `${value.slice(0, 2)}.${value.slice(2, 5)}.${value.slice(5, 8)}/${value.slice(
-    8,
-    12
-  )}-${value.slice(12, 14)}`;
+const formatDateTime = (value: string) => {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' });
 };
 
-const formatCpfCnpj = (value: string) => {
-  const digits = value.replace(/\D/g, '');
-  if (digits.length <= 11) {
-    return formatCpf(digits);
-  }
-  return formatCnpj(digits);
+const toLocalInputValue = (iso: string) => {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return '';
+  const pad = (val: number) => val.toString().padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(
+    date.getHours()
+  )}:${pad(date.getMinutes())}`;
 };
 
-const formatDisplayDate = (value: string) => {
-  if (!value) return '-';
-  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) {
-    const [year, month, day] = value.split('-');
-    return `${day}/${month}/${year}`;
-  }
-  const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) {
-    return value;
-  }
-  return parsed.toLocaleDateString('pt-BR');
+const toIsoFromLocal = (value: string) => {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  return date.toISOString();
 };
-
-const getDocumentTitle = (type: DocumentType) =>
-  type === 'PARECER'
-    ? t('appointments.document.opinionTitle')
-    : t('appointments.document.reportTitle');
 
 const AppAppointments = () => {
   const { sessionId } = useAuth();
-  const [appointments, setAppointments] = useState<AppointmentSummary[]>([]);
-  const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [clients, setClients] = useState<ClientSummary[]>([]);
+  const [selectedClientId, setSelectedClientId] = useState('');
+  const [attendances, setAttendances] = useState<AttendanceSummary[]>([]);
+  const [isClientsLoading, setIsClientsLoading] = useState(false);
+  const [isAttendancesLoading, setIsAttendancesLoading] = useState(false);
+  const [clientsError, setClientsError] = useState<string | null>(null);
+  const [attendanceError, setAttendanceError] = useState<string | null>(null);
   const [toast, setToast] = useState<ToastState>(null);
   const [isFormOpen, setIsFormOpen] = useState(false);
-  const [formState, setFormState] = useState<AppointmentFormState>({
-    clientName: '',
-    clientDocument: '',
-    clientEmail: '',
-    clientPhone: '',
-    title: '',
-    attendanceDate: '',
-    history: '',
-    analysis: '',
-    conclusion: ''
+  const [formMode, setFormMode] = useState<'create' | 'edit'>('create');
+  const [attendanceForm, setAttendanceForm] = useState<AttendanceFormState>({
+    occurredAt: '',
+    channel: '',
+    subject: '',
+    notes: ''
   });
-  const [previewState, setPreviewState] = useState<PreviewState | null>(null);
-  const previewFrameRef = useRef<HTMLIFrameElement | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<AttendanceSummary | null>(null);
 
   const canFetch = useMemo(() => !!sessionId, [sessionId]);
 
-  const loadAppointments = async () => {
+  const loadClients = async () => {
     if (!sessionId) return;
-    setIsLoading(true);
-    setError(null);
+    setIsClientsLoading(true);
+    setClientsError(null);
     try {
-      const data = await appointmentsList(sessionId);
-      setAppointments(data);
+      const data = await clientsList(sessionId, { status: 'ACTIVE' });
+      setClients(data);
+      if (!selectedClientId && data.length > 0) {
+        setSelectedClientId(data[0].id);
+      }
     } catch (err) {
-      setError(getErrorMessage(err, t('appointments.error.load')));
+      setClientsError(getErrorMessage(err, t('appointments.error.load')));
     } finally {
-      setIsLoading(false);
+      setIsClientsLoading(false);
+    }
+  };
+
+  const loadAttendances = async (clientId: string) => {
+    if (!sessionId || !clientId) return;
+    setIsAttendancesLoading(true);
+    setAttendanceError(null);
+    try {
+      const data = await attendancesList(sessionId, clientId);
+      setAttendances(data);
+    } catch (err) {
+      setAttendanceError(getErrorMessage(err, t('clientDetail.error.loadAttendances')));
+    } finally {
+      setIsAttendancesLoading(false);
     }
   };
 
   useEffect(() => {
     if (canFetch) {
-      void loadAppointments();
+      void loadClients();
     }
   }, [canFetch]);
 
-  const handleOpenForm = () => {
-    setFormState({
-      clientName: '',
-      clientDocument: '',
-      clientEmail: '',
-      clientPhone: '',
-      title: '',
-      attendanceDate: '',
-      history: '',
-      analysis: '',
-      conclusion: ''
+  useEffect(() => {
+    if (selectedClientId) {
+      void loadAttendances(selectedClientId);
+    } else {
+      setAttendances([]);
+    }
+  }, [selectedClientId]);
+
+  const openCreateForm = () => {
+    if (!selectedClientId) {
+      setToast({ message: t('appointments.toast.nameRequired'), severity: 'warning' });
+      return;
+    }
+    setFormMode('create');
+    setAttendanceForm({
+      occurredAt: toLocalInputValue(new Date().toISOString()),
+      channel: '',
+      subject: '',
+      notes: ''
     });
     setIsFormOpen(true);
   };
 
-  const handleSubmit = async () => {
-    if (!sessionId) return;
-    if (!formState.clientName.trim()) {
-      setToast({ message: t('appointments.toast.nameRequired'), severity: 'warning' });
-      return;
-    }
-    if (!formState.clientDocument.trim()) {
-      setToast({ message: t('appointments.toast.documentRequired'), severity: 'warning' });
-      return;
-    }
-    if (!formState.title.trim()) {
-      setToast({ message: t('appointments.toast.subjectRequired'), severity: 'warning' });
-      return;
-    }
-    if (!formState.attendanceDate) {
-      setToast({ message: t('appointments.toast.dateRequired'), severity: 'warning' });
-      return;
-    }
-
-    setIsLoading(true);
-    try {
-      await appointmentsCreate(sessionId, {
-        ...formState,
-        clientDocument: formState.clientDocument
-      });
-      setToast({ message: t('appointments.toast.created'), severity: 'success' });
-      setIsFormOpen(false);
-      await loadAppointments();
-    } catch (err) {
-      setToast({
-        message: getErrorMessage(err, t('appointments.toast.saveError')),
-        severity: 'error'
-      });
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  const buildDocumentPayload = (detail: AppointmentDetail, documentType: DocumentType) => {
-    return {
-      documentType,
-      officeName: OFFICE_NAME,
-      generatedAt: new Date().toLocaleDateString('pt-BR'),
-      clientName: detail.clientName,
-      clientDocument: formatCpfCnpj(detail.clientDocument),
-      clientEmail: detail.clientEmail ?? undefined,
-      clientPhone: detail.clientPhone ?? undefined,
-      title: detail.title,
-      attendanceDate: formatDisplayDate(detail.attendanceDate),
-      history: detail.history,
-      analysis: detail.analysis,
-      conclusion: detail.conclusion,
-      appointmentId: detail.id
-    };
-  };
-
-  const handleGenerate = async (appointmentId: string, documentType: DocumentType) => {
-    if (!sessionId) return;
-    setIsLoading(true);
-    try {
-      const detail = await appointmentsGet(sessionId, appointmentId);
-      const payload = buildDocumentPayload(detail, documentType);
-      const response = await documentsGenerateHtml(sessionId, payload);
-      setPreviewState({
-        html: response.html,
-        appointmentId: detail.id,
-        documentType,
-        clientName: detail.clientName
-      });
-    } catch (err) {
-      setToast({
-        message: getErrorMessage(err, t('appointments.toast.generateError')),
-        severity: 'error'
-      });
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  const handleClosePreview = () => {
-    setPreviewState(null);
-  };
-
-  const handleExportPdf = async () => {
-    if (!sessionId || !previewState) return;
-    const frame = previewFrameRef.current;
-    if (!frame?.contentWindow) {
-      setToast({ message: t('appointments.toast.previewUnavailable'), severity: 'warning' });
-      return;
-    }
-    frame.contentWindow.focus();
-    frame.contentWindow.print();
-    try {
-      await documentsLogExport(sessionId, {
-        documentType: previewState.documentType,
-        appointmentId: previewState.appointmentId,
-        format: 'PDF'
-      });
-    } catch (err) {
-      setToast({
-        message: getErrorMessage(err, t('appointments.toast.exportLogError')),
-        severity: 'warning'
-      });
-    }
-  };
-
-  const handleExportHtml = async () => {
-    if (!sessionId || !previewState) return;
-    const defaultName = `${previewState.documentType.toLowerCase()}-${previewState.clientName
-      .toLowerCase()
-      .replace(/\s+/g, '-')}`;
-    const filePath = await save({
-      defaultPath: `${defaultName}.html`,
-      filters: [{ name: t('appointments.filter.htmlDocument'), extensions: ['html'] }]
+  const openEditForm = (attendance: AttendanceSummary) => {
+    setFormMode('edit');
+    setAttendanceForm({
+      id: attendance.id,
+      occurredAt: toLocalInputValue(attendance.occurredAt),
+      channel: attendance.channel,
+      subject: attendance.subject,
+      notes: attendance.notes
     });
-    if (!filePath) return;
+    setIsFormOpen(true);
+  };
+
+  const handleSaveAttendance = async () => {
+    if (!sessionId || !selectedClientId) return;
+    const occurredAtIso = toIsoFromLocal(attendanceForm.occurredAt);
+    if (!occurredAtIso) {
+      setToast({ message: t('clientDetail.toast.dateRequired'), severity: 'error' });
+      return;
+    }
+    if (!attendanceForm.channel) {
+      setToast({ message: t('clientDetail.toast.channelRequired'), severity: 'error' });
+      return;
+    }
+    if (!attendanceForm.subject.trim()) {
+      setToast({ message: t('clientDetail.toast.subjectRequired'), severity: 'error' });
+      return;
+    }
+    if (!attendanceForm.notes.trim()) {
+      setToast({ message: t('clientDetail.toast.notesRequired'), severity: 'error' });
+      return;
+    }
+
+    const payload: AttendancePayload = {
+      occurredAt: occurredAtIso,
+      channel: attendanceForm.channel as AttendanceChannel,
+      subject: attendanceForm.subject.trim(),
+      notes: attendanceForm.notes.trim()
+    };
+
     try {
-      await documentsExportHtml(sessionId, {
-        html: previewState.html,
-        filePath,
-        documentType: previewState.documentType,
-        appointmentId: previewState.appointmentId
-      });
-      setToast({ message: t('appointments.toast.htmlSaved'), severity: 'success' });
+      if (formMode === 'create') {
+        await attendancesCreate(sessionId, selectedClientId, payload);
+        setToast({ message: t('clientDetail.toast.created'), severity: 'success' });
+      } else if (attendanceForm.id) {
+        await attendancesUpdate(sessionId, attendanceForm.id, payload);
+        setToast({ message: t('clientDetail.toast.updated'), severity: 'success' });
+      }
+      setIsFormOpen(false);
+      await loadAttendances(selectedClientId);
     } catch (err) {
       setToast({
-        message: getErrorMessage(err, t('appointments.toast.htmlSaveError')),
+        message: getErrorMessage(err, t('clientDetail.toast.saveError')),
+        severity: 'error'
+      });
+    }
+  };
+
+  const handleDeleteAttendance = async () => {
+    if (!sessionId || !deleteTarget) return;
+    try {
+      await attendancesDelete(sessionId, deleteTarget.id);
+      setToast({ message: t('clientDetail.toast.removed'), severity: 'success' });
+      setDeleteTarget(null);
+      await loadAttendances(selectedClientId);
+    } catch (err) {
+      setToast({
+        message: getErrorMessage(err, t('clientDetail.toast.removeError')),
         severity: 'error'
       });
     }
@@ -295,211 +239,164 @@ const AppAppointments = () => {
 
   return (
     <Box>
-      <Stack direction="row" alignItems="center" justifyContent="space-between" mb={3}>
-        <Box>
-          <Typography variant="h4">{t('appointments.title')}</Typography>
-          <Typography variant="body2" color="text.secondary">
-            {t('appointments.subtitle')}
+      <Stack spacing={2}>
+        <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} alignItems="center">
+          <Typography variant="h4" sx={{ flexGrow: 1 }}>
+            {t('app.attendances')}
           </Typography>
-        </Box>
-        <Button variant="contained" onClick={handleOpenForm}>
-          {t('appointments.new')}
-        </Button>
+          <Button variant="contained" onClick={openCreateForm}>
+            {t('clientDetail.button.newAttendance')}
+          </Button>
+        </Stack>
+
+        {clientsError && <Alert severity="error">{clientsError}</Alert>}
+
+        <FormControl fullWidth disabled={isClientsLoading}>
+          <InputLabel>{t('appointments.form.clientName')}</InputLabel>
+          <Select
+            label={t('appointments.form.clientName')}
+            value={selectedClientId}
+            onChange={(event) => setSelectedClientId(event.target.value)}
+          >
+            {clients.map((client) => (
+              <MenuItem key={client.id} value={client.id}>
+                {client.name} · {client.cpfCnpj}
+              </MenuItem>
+            ))}
+          </Select>
+        </FormControl>
+
+        {attendanceError && <Alert severity="error">{attendanceError}</Alert>}
+
+        <Table size="small">
+          <TableHead>
+            <TableRow>
+              <TableCell>{t('clientDetail.table.dateTime')}</TableCell>
+              <TableCell>{t('clientDetail.table.channel')}</TableCell>
+              <TableCell>{t('clientDetail.table.subject')}</TableCell>
+              <TableCell>{t('clientDetail.table.notes')}</TableCell>
+              <TableCell align="right">{t('clientDetail.table.actions')}</TableCell>
+            </TableRow>
+          </TableHead>
+          <TableBody>
+            {attendances.map((attendance) => (
+              <TableRow key={attendance.id} hover>
+                <TableCell>{formatDateTime(attendance.occurredAt)}</TableCell>
+                <TableCell>{channelLabels[attendance.channel]}</TableCell>
+                <TableCell>{attendance.subject}</TableCell>
+                <TableCell>{attendance.notes}</TableCell>
+                <TableCell align="right">
+                  <Stack direction="row" spacing={1} justifyContent="flex-end">
+                    <Button
+                      size="small"
+                      variant="outlined"
+                      onClick={() => openEditForm(attendance)}
+                    >
+                      {t('common.edit')}
+                    </Button>
+                    <Button
+                      size="small"
+                      variant="outlined"
+                      color="error"
+                      onClick={() => setDeleteTarget(attendance)}
+                    >
+                      {t('common.remove')}
+                    </Button>
+                  </Stack>
+                </TableCell>
+              </TableRow>
+            ))}
+            {!isAttendancesLoading && attendances.length === 0 && (
+              <TableRow>
+                <TableCell colSpan={5} align="center">
+                  {t('clientDetail.emptyAttendances')}
+                </TableCell>
+              </TableRow>
+            )}
+          </TableBody>
+        </Table>
       </Stack>
 
-      {error && (
-        <Box mb={2}>
-          <Alert severity="error">{error}</Alert>
-        </Box>
-      )}
-
-      <Table>
-        <TableHead>
-          <TableRow>
-            <TableCell>{t('appointments.table.client')}</TableCell>
-            <TableCell>{t('appointments.table.document')}</TableCell>
-            <TableCell>{t('appointments.table.subject')}</TableCell>
-            <TableCell>{t('appointments.table.date')}</TableCell>
-            <TableCell align="right">{t('appointments.table.actions')}</TableCell>
-          </TableRow>
-        </TableHead>
-        <TableBody>
-          {appointments.map((appointment) => (
-            <TableRow key={appointment.id}>
-              <TableCell>{appointment.clientName}</TableCell>
-              <TableCell>{formatCpfCnpj(appointment.clientDocument)}</TableCell>
-              <TableCell>{appointment.title}</TableCell>
-              <TableCell>{formatDisplayDate(appointment.attendanceDate)}</TableCell>
-              <TableCell align="right">
-                <Stack direction="row" spacing={1} justifyContent="flex-end">
-                  <Button
-                    size="small"
-                    variant="outlined"
-                    onClick={() => handleGenerate(appointment.id, 'RELATORIO')}
-                  >
-                    {t('appointments.button.generateReport')}
-                  </Button>
-                  <Button
-                    size="small"
-                    variant="contained"
-                    onClick={() => handleGenerate(appointment.id, 'PARECER')}
-                  >
-                    {t('appointments.button.generateOpinion')}
-                  </Button>
-                </Stack>
-              </TableCell>
-            </TableRow>
-          ))}
-          {appointments.length === 0 && (
-            <TableRow>
-              <TableCell colSpan={5} align="center">
-                {t('appointments.empty')}
-              </TableCell>
-            </TableRow>
-          )}
-        </TableBody>
-      </Table>
-
-      <Dialog open={isFormOpen} onClose={() => setIsFormOpen(false)} maxWidth="md" fullWidth>
-        <DialogTitle>{t('appointments.dialog.new')}</DialogTitle>
+      <Dialog open={isFormOpen} onClose={() => setIsFormOpen(false)} fullWidth maxWidth="sm">
+        <DialogTitle>
+          {formMode === 'create' ? t('clientDetail.dialog.new') : t('clientDetail.dialog.edit')}
+        </DialogTitle>
         <DialogContent>
           <Stack spacing={2} mt={1}>
             <TextField
-              label={t('appointments.form.clientName')}
-              value={formState.clientName}
+              label={t('clientDetail.form.dateTime')}
+              type="datetime-local"
+              value={attendanceForm.occurredAt}
               onChange={(event) =>
-                setFormState((prev) => ({ ...prev, clientName: event.target.value }))
+                setAttendanceForm((prev) => ({ ...prev, occurredAt: event.target.value }))
+              }
+              fullWidth
+              InputLabelProps={{ shrink: true }}
+            />
+            <FormControl fullWidth>
+              <InputLabel>{t('clientDetail.form.channel')}</InputLabel>
+              <Select
+                label={t('clientDetail.form.channel')}
+                value={attendanceForm.channel}
+                onChange={(event) =>
+                  setAttendanceForm((prev) => ({
+                    ...prev,
+                    channel: event.target.value as AttendanceChannel
+                  }))
+                }
+              >
+                {channelOptions.map((channel) => (
+                  <MenuItem key={channel} value={channel}>
+                    {channelLabels[channel]}
+                  </MenuItem>
+                ))}
+              </Select>
+            </FormControl>
+            <TextField
+              label={t('clientDetail.form.subject')}
+              value={attendanceForm.subject}
+              onChange={(event) =>
+                setAttendanceForm((prev) => ({ ...prev, subject: event.target.value }))
               }
               fullWidth
             />
-            <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}>
-              <TextField
-                label={t('appointments.form.document')}
-                value={formatCpfCnpj(formState.clientDocument)}
-                onChange={(event) =>
-                  setFormState((prev) => ({ ...prev, clientDocument: event.target.value }))
-                }
-                fullWidth
-              />
-              <TextField
-                label={t('appointments.form.date')}
-                type="date"
-                value={formState.attendanceDate}
-                onChange={(event) =>
-                  setFormState((prev) => ({ ...prev, attendanceDate: event.target.value }))
-                }
-                InputLabelProps={{ shrink: true }}
-                fullWidth
-              />
-            </Stack>
-            <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}>
-              <TextField
-                label={t('appointments.form.email')}
-                value={formState.clientEmail}
-                onChange={(event) =>
-                  setFormState((prev) => ({ ...prev, clientEmail: event.target.value }))
-                }
-                fullWidth
-              />
-              <TextField
-                label={t('appointments.form.phone')}
-                value={formState.clientPhone}
-                onChange={(event) =>
-                  setFormState((prev) => ({ ...prev, clientPhone: event.target.value }))
-                }
-                fullWidth
-              />
-            </Stack>
             <TextField
-              label={t('appointments.form.subject')}
-              value={formState.title}
-              onChange={(event) => setFormState((prev) => ({ ...prev, title: event.target.value }))}
-              fullWidth
-            />
-            <TextField
-              label={t('appointments.form.history')}
-              value={formState.history}
+              label={t('clientDetail.form.notes')}
+              value={attendanceForm.notes}
               onChange={(event) =>
-                setFormState((prev) => ({ ...prev, history: event.target.value }))
+                setAttendanceForm((prev) => ({ ...prev, notes: event.target.value }))
               }
+              fullWidth
               multiline
               minRows={3}
-              fullWidth
-            />
-            <TextField
-              label={t('appointments.form.analysis')}
-              value={formState.analysis}
-              onChange={(event) =>
-                setFormState((prev) => ({ ...prev, analysis: event.target.value }))
-              }
-              multiline
-              minRows={3}
-              fullWidth
-            />
-            <TextField
-              label={t('appointments.form.conclusion')}
-              value={formState.conclusion}
-              onChange={(event) =>
-                setFormState((prev) => ({ ...prev, conclusion: event.target.value }))
-              }
-              multiline
-              minRows={3}
-              fullWidth
             />
           </Stack>
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setIsFormOpen(false)}>{t('common.cancel')}</Button>
-          <Button variant="contained" onClick={handleSubmit} disabled={isLoading}>
+          <Button variant="contained" onClick={handleSaveAttendance}>
             {t('common.save')}
           </Button>
         </DialogActions>
       </Dialog>
 
-      <Dialog
-        open={!!previewState}
-        onClose={handleClosePreview}
-        maxWidth="lg"
-        fullWidth
-      >
-        <DialogTitle>
-          {previewState
-            ? `${t('appointments.preview.titleWithType')} ${getDocumentTitle(
-                previewState.documentType
-              )}`
-            : t('appointments.preview.title')}
-        </DialogTitle>
+      <Dialog open={!!deleteTarget} onClose={() => setDeleteTarget(null)} fullWidth maxWidth="xs">
+        <DialogTitle>{t('clientDetail.dialog.removeTitle')}</DialogTitle>
         <DialogContent>
-          {previewState && (
-            <Box sx={{ height: '70vh' }}>
-              <iframe
-                ref={previewFrameRef}
-                title={t('appointments.preview.iframeTitle')}
-                style={{ width: '100%', height: '100%', border: '1px solid #e0e0e0' }}
-                srcDoc={previewState.html}
-              />
-            </Box>
-          )}
+          <Typography>{t('clientDetail.dialog.removeConfirm')}</Typography>
         </DialogContent>
         <DialogActions>
-          <Button onClick={handleExportHtml}>{t('appointments.preview.saveHtml')}</Button>
-          <Button variant="contained" onClick={handleExportPdf}>
-            {t('appointments.preview.exportPdf')}
+          <Button onClick={() => setDeleteTarget(null)}>{t('common.cancel')}</Button>
+          <Button variant="contained" color="error" onClick={handleDeleteAttendance}>
+            {t('common.remove')}
           </Button>
         </DialogActions>
       </Dialog>
 
-      <Snackbar
-        open={!!toast}
-        autoHideDuration={4000}
-        onClose={() => setToast(null)}
-        anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
-      >
-        {toast && (
-          <Alert severity={toast.severity} onClose={() => setToast(null)}>
-            {toast.message}
-          </Alert>
-        )}
+      <Snackbar open={!!toast} autoHideDuration={4000} onClose={() => setToast(null)}>
+        <Alert onClose={() => setToast(null)} severity={toast?.severity ?? 'info'} variant="filled">
+          {toast?.message}
+        </Alert>
       </Snackbar>
     </Box>
   );
