@@ -1,17 +1,20 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 
+use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
-use std::fmt;
 
 use argon2::password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString};
 use argon2::Argon2;
 use chrono::{Duration, Utc};
+use hex;
 use rand_core::OsRng;
 use rusqlite::{params, params_from_iter, Connection, ErrorCode, OptionalExtension};
 use serde::{Deserialize, Serialize};
+use serde_json::json;
+use sha2::{Digest, Sha256};
 use tauri::{AppHandle, Manager, State};
 use uuid::Uuid;
 
@@ -277,6 +280,12 @@ struct AttendancePayload {
 #[serde(rename_all = "camelCase")]
 struct DocumentHtmlResponse {
   html: String,
+  document_id: String,
+  document_hash: String,
+  content_hash: String,
+  created_at: String,
+  authored_by_name: String,
+  authored_by_oab: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Copy)]
@@ -286,12 +295,22 @@ enum DocumentType {
   Parecer,
 }
 
+impl DocumentType {
+  fn as_str(&self) -> &'static str {
+    match self {
+      DocumentType::Relatorio => "RELATORIO",
+      DocumentType::Parecer => "PARECER",
+    }
+  }
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct DocumentGeneratePayload {
   document_type: DocumentType,
   office_name: String,
   generated_at: String,
+  client_id: String,
   client_name: String,
   client_document: String,
   client_email: Option<String>,
@@ -307,18 +326,25 @@ struct DocumentGeneratePayload {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct DocumentExportHtmlPayload {
-  html: String,
   file_path: String,
-  document_type: DocumentType,
+  document_id: String,
+  document_type: Option<DocumentType>,
   appointment_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct DocumentLogExportPayload {
-  document_type: DocumentType,
+  document_id: String,
+  document_type: Option<DocumentType>,
   appointment_id: Option<String>,
   format: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DocumentExportHtmlResponse {
+  file_path: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -388,6 +414,68 @@ struct SessionRow {
 
 fn now_iso() -> String {
   Utc::now().to_rfc3339()
+}
+
+fn normalize_html_for_hash(html: &str) -> String {
+  html.replace("\r\n", "\n").replace('\r', "\n").trim_end().to_string()
+}
+
+fn sha256_hex(data: &[u8]) -> String {
+  let mut hasher = Sha256::new();
+  hasher.update(data);
+  hex::encode(hasher.finalize())
+}
+
+fn build_canonical_string(
+  version: &str,
+  document_type: &str,
+  office_name: &str,
+  client_id: &str,
+  authored_by_user_id: &str,
+  created_at: &str,
+  content_hash: &str,
+) -> String {
+  format!(
+    "v={}\ndocument_type={}\noffice_name={}\nclient_id={}\nauthored_by_user_id={}\ncreated_at={}\ncontent_hash={}",
+    version,
+    document_type,
+    office_name,
+    client_id,
+    authored_by_user_id,
+    created_at,
+    content_hash
+  )
+}
+
+fn build_signature_block(
+  authored_by_user_name: &str,
+  authored_by_oab: Option<&str>,
+  office_name: &str,
+  created_at: &str,
+  document_hash: &str,
+) -> String {
+  let oab_value = authored_by_oab.map(|value| format!(" {}", value)).unwrap_or_default();
+  format!(
+    "<footer class=\"document-signature\">
+  <p>Assinado digitalmente por: {}{}</p>
+  <p>Escritório: {}</p>
+  <p>Data: {}</p>
+  <p>Hash do documento: {}</p>
+</footer>",
+    authored_by_user_name, oab_value, office_name, created_at, document_hash
+  )
+}
+
+fn inject_signature_block(html: &str, signature_block: &str) -> String {
+  if let Some(index) = html.rfind("</body>") {
+    let mut signed = String::with_capacity(html.len() + signature_block.len());
+    signed.push_str(&html[..index]);
+    signed.push_str(signature_block);
+    signed.push_str(&html[index..]);
+    signed
+  } else {
+    format!("{}\n{}", html, signature_block)
+  }
 }
 
 fn db_path(app: &AppHandle, state: &State<'_, AppState>) -> AppResult<PathBuf> {
@@ -517,6 +605,32 @@ fn run_migrations(conn: &Connection) -> AppResult<()> {
       ON ATTENDANCES(client_id, occurred_at);
       ",
     ),
+    (
+      "0005_document_signatures",
+      "\
+      CREATE TABLE IF NOT EXISTS DOCUMENT_SIGNATURES(
+        id TEXT PRIMARY KEY,
+        document_id TEXT NOT NULL,
+        document_type TEXT NOT NULL,
+        client_id TEXT NOT NULL,
+        office_name TEXT NOT NULL,
+        authored_by_user_id TEXT NOT NULL,
+        authored_by_user_name TEXT NOT NULL,
+        authored_by_oab TEXT,
+        created_at TEXT NOT NULL,
+        content_hash TEXT NOT NULL,
+        document_hash TEXT NOT NULL,
+        signature_block TEXT NOT NULL,
+        signed_html TEXT NOT NULL,
+        exported_path TEXT,
+        exported_at TEXT,
+        status TEXT NOT NULL DEFAULT 'ACTIVE'
+      );
+      CREATE INDEX IF NOT EXISTS idx_docsign_client ON DOCUMENT_SIGNATURES(client_id);
+      CREATE INDEX IF NOT EXISTS idx_docsign_hash ON DOCUMENT_SIGNATURES(document_hash);
+      CREATE INDEX IF NOT EXISTS idx_docsign_docid ON DOCUMENT_SIGNATURES(document_id);
+      ",
+    ),
   ];
 
   for (id, sql) in migrations {
@@ -587,6 +701,13 @@ fn require_active_session(conn: &Connection, session_id: &str) -> AppResult<Sess
   }
 
   Ok(session)
+}
+
+fn fetch_user_name(conn: &Connection, user_id: &str) -> AppResult<String> {
+  let mut stmt = conn.prepare("SELECT name FROM USERS WHERE id = ?1")?;
+  stmt
+    .query_row(params![user_id], |row| row.get::<_, String>(0))
+    .map_err(|_| AppError::new("not_found", "Usuário não encontrado."))
 }
 
 fn require_admin_session(conn: &Connection, session_id: &str) -> AppResult<UserInfo> {
@@ -2018,8 +2139,12 @@ fn documents_generate_html(
   let conn = open_connection(&path)?;
   run_migrations(&conn)?;
   let user = require_active_session(&conn, &session_id)?;
+  let user_name = fetch_user_name(&conn, &user.user_id)?;
+  let created_at = now_iso();
+  let document_id = Uuid::new_v4().to_string();
+  let signature_id = Uuid::new_v4().to_string();
 
-  let html = format!(
+  let html_base = format!(
     "<!doctype html>
 <html lang=\"pt-BR\">
 <head>
@@ -2057,6 +2182,51 @@ fn documents_generate_html(
     payload.conclusion
   );
 
+  let normalized_html = normalize_html_for_hash(&html_base);
+  let content_hash = sha256_hex(normalized_html.as_bytes());
+  let document_type = payload.document_type.as_str();
+  let canonical_string = build_canonical_string(
+    "v1",
+    document_type,
+    &payload.office_name,
+    &payload.client_id,
+    &user.user_id,
+    &created_at,
+    &content_hash,
+  );
+  let document_hash = sha256_hex(canonical_string.as_bytes());
+  let authored_by_oab: Option<String> = None;
+  let signature_block = build_signature_block(
+    &user_name,
+    authored_by_oab.as_deref(),
+    &payload.office_name,
+    &created_at,
+    &document_hash,
+  );
+  let signed_html = inject_signature_block(&html_base, &signature_block);
+
+  conn.execute(
+    "INSERT INTO DOCUMENT_SIGNATURES
+     (id, document_id, document_type, client_id, office_name, authored_by_user_id, authored_by_user_name,
+      authored_by_oab, created_at, content_hash, document_hash, signature_block, signed_html)
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+    params![
+      signature_id,
+      document_id,
+      document_type,
+      payload.client_id,
+      payload.office_name,
+      user.user_id,
+      user_name,
+      authored_by_oab,
+      created_at,
+      content_hash,
+      document_hash,
+      signature_block,
+      signed_html
+    ],
+  )?;
+
   insert_audit_log(
     &conn,
     &user.user_id,
@@ -2064,10 +2234,24 @@ fn documents_generate_html(
     Some("DOCUMENT"),
     payload.appointment_id.as_deref(),
     Some("HTML gerado para documento"),
-    None,
+    Some(
+      &json!({
+        "documentId": document_id,
+        "documentHash": document_hash
+      })
+      .to_string(),
+    ),
   )?;
 
-  Ok(DocumentHtmlResponse { html })
+  Ok(DocumentHtmlResponse {
+    html: signed_html,
+    document_id,
+    document_hash,
+    content_hash,
+    created_at,
+    authored_by_name: user_name,
+    authored_by_oab,
+  })
 }
 
 #[tauri::command]
@@ -2076,13 +2260,26 @@ fn documents_export_html(
   state: State<'_, AppState>,
   session_id: String,
   payload: DocumentExportHtmlPayload,
-) -> AppResult<()> {
+) -> AppResult<DocumentExportHtmlResponse> {
   let path = db_path(&app, &state)?;
   let conn = open_connection(&path)?;
   run_migrations(&conn)?;
   let user = require_active_session(&conn, &session_id)?;
+  let now = now_iso();
 
-  fs::write(&payload.file_path, payload.html)?;
+  let mut stmt = conn.prepare(
+    "SELECT signed_html FROM DOCUMENT_SIGNATURES WHERE document_id = ?1",
+  )?;
+  let signed_html = stmt
+    .query_row(params![payload.document_id], |row| row.get::<_, String>(0))
+    .map_err(|_| AppError::new("not_found", "Documento não encontrado."))?;
+
+  fs::write(&payload.file_path, signed_html)?;
+
+  conn.execute(
+    "UPDATE DOCUMENT_SIGNATURES SET exported_path = ?1, exported_at = ?2 WHERE document_id = ?3",
+    params![payload.file_path, now, payload.document_id],
+  )?;
 
   insert_audit_log(
     &conn,
@@ -2091,10 +2288,18 @@ fn documents_export_html(
     Some("DOCUMENT"),
     payload.appointment_id.as_deref(),
     Some("Documento exportado"),
-    None,
+    Some(
+      &json!({
+        "documentId": payload.document_id,
+        "filePath": payload.file_path
+      })
+      .to_string(),
+    ),
   )?;
 
-  Ok(())
+  Ok(DocumentExportHtmlResponse {
+    file_path: payload.file_path,
+  })
 }
 
 #[tauri::command]
@@ -2108,6 +2313,17 @@ fn documents_log_export(
   let conn = open_connection(&path)?;
   run_migrations(&conn)?;
   let user = require_active_session(&conn, &session_id)?;
+  let now = now_iso();
+
+  let updated = conn.execute(
+    "UPDATE DOCUMENT_SIGNATURES
+     SET exported_at = COALESCE(exported_at, ?1)
+     WHERE document_id = ?2",
+    params![now, payload.document_id],
+  )?;
+  if updated == 0 {
+    return Err(AppError::new("not_found", "Documento não encontrado."));
+  }
 
   insert_audit_log(
     &conn,
@@ -2116,7 +2332,13 @@ fn documents_log_export(
     Some("DOCUMENT"),
     payload.appointment_id.as_deref(),
     Some("Exportação registrada"),
-    Some(&payload.format),
+    Some(
+      &json!({
+        "documentId": payload.document_id,
+        "format": payload.format
+      })
+      .to_string(),
+    ),
   )?;
 
   Ok(())

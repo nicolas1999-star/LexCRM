@@ -52,3 +52,11 @@ O SQLite é criado automaticamente em:
 ```
 
 Migrações são registradas em `schema_migrations`.
+
+## 📄 Documentos assinados
+- Cada geração de documento cria um `documentId` (UUID) que identifica o conteúdo assinado.
+- O hash é calculado em duas etapas:
+  - `content_hash`: SHA-256 do HTML base normalizado (CRLF → LF e `trim_end()`), sem assinatura.
+  - `document_hash`: SHA-256 de uma string canônica com metadados + `content_hash`.
+- A assinatura e o HTML final são persistidos na tabela `DOCUMENT_SIGNATURES`, junto com `document_hash` e o `signed_html`.
+- Para verificar a assinatura, compare o `document_hash` exibido no app com o valor gravado na coluna `document_hash` da tabela `DOCUMENT_SIGNATURES` para o mesmo `document_id`.

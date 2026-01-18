@@ -1587,10 +1587,12 @@ version = "0.1.0"
 dependencies = [
  "argon2",
  "chrono",
+ "hex",
  "rand_core 0.6.4",
  "rusqlite",
  "serde",
  "serde_json",
+ "sha2",
  "tauri",
  "tauri-build",
  "uuid",
