@@ -34,6 +34,7 @@ import {
   type DocumentType
 } from '../api/documents';
 import { getErrorMessage } from '../api/errors';
+import { t } from '../i18n';
 
 type ToastState = {
   message: string;
@@ -98,7 +99,9 @@ const formatDisplayDate = (value: string) => {
 };
 
 const getDocumentTitle = (type: DocumentType) =>
-  type === 'PARECER' ? 'Parecer' : 'Relatório de atendimento';
+  type === 'PARECER'
+    ? t('appointments.document.opinionTitle')
+    : t('appointments.document.reportTitle');
 
 const AppAppointments = () => {
   const { sessionId } = useAuth();
@@ -131,7 +134,7 @@ const AppAppointments = () => {
       const data = await appointmentsList(sessionId);
       setAppointments(data);
     } catch (err) {
-      setError(getErrorMessage(err, 'Falha ao carregar atendimentos.'));
+      setError(getErrorMessage(err, t('appointments.error.load')));
     } finally {
       setIsLoading(false);
     }
@@ -161,19 +164,19 @@ const AppAppointments = () => {
   const handleSubmit = async () => {
     if (!sessionId) return;
     if (!formState.clientName.trim()) {
-      setToast({ message: 'Informe o nome do cliente.', severity: 'warning' });
+      setToast({ message: t('appointments.toast.nameRequired'), severity: 'warning' });
       return;
     }
     if (!formState.clientDocument.trim()) {
-      setToast({ message: 'Informe o CPF/CNPJ.', severity: 'warning' });
+      setToast({ message: t('appointments.toast.documentRequired'), severity: 'warning' });
       return;
     }
     if (!formState.title.trim()) {
-      setToast({ message: 'Informe o assunto.', severity: 'warning' });
+      setToast({ message: t('appointments.toast.subjectRequired'), severity: 'warning' });
       return;
     }
     if (!formState.attendanceDate) {
-      setToast({ message: 'Informe a data do atendimento.', severity: 'warning' });
+      setToast({ message: t('appointments.toast.dateRequired'), severity: 'warning' });
       return;
     }
 
@@ -183,11 +186,14 @@ const AppAppointments = () => {
         ...formState,
         clientDocument: formState.clientDocument
       });
-      setToast({ message: 'Atendimento registrado.', severity: 'success' });
+      setToast({ message: t('appointments.toast.created'), severity: 'success' });
       setIsFormOpen(false);
       await loadAppointments();
     } catch (err) {
-      setToast({ message: getErrorMessage(err, 'Falha ao salvar atendimento.'), severity: 'error' });
+      setToast({
+        message: getErrorMessage(err, t('appointments.toast.saveError')),
+        severity: 'error'
+      });
     } finally {
       setIsLoading(false);
     }
@@ -226,7 +232,7 @@ const AppAppointments = () => {
       });
     } catch (err) {
       setToast({
-        message: getErrorMessage(err, 'Falha ao gerar documento.'),
+        message: getErrorMessage(err, t('appointments.toast.generateError')),
         severity: 'error'
       });
     } finally {
@@ -242,7 +248,7 @@ const AppAppointments = () => {
     if (!sessionId || !previewState) return;
     const frame = previewFrameRef.current;
     if (!frame?.contentWindow) {
-      setToast({ message: 'Visualização indisponível para impressão.', severity: 'warning' });
+      setToast({ message: t('appointments.toast.previewUnavailable'), severity: 'warning' });
       return;
     }
     frame.contentWindow.focus();
@@ -255,7 +261,7 @@ const AppAppointments = () => {
       });
     } catch (err) {
       setToast({
-        message: getErrorMessage(err, 'Falha ao registrar exportação.'),
+        message: getErrorMessage(err, t('appointments.toast.exportLogError')),
         severity: 'warning'
       });
     }
@@ -268,7 +274,7 @@ const AppAppointments = () => {
       .replace(/\s+/g, '-')}`;
     const filePath = await save({
       defaultPath: `${defaultName}.html`,
-      filters: [{ name: 'Documento HTML', extensions: ['html'] }]
+      filters: [{ name: t('appointments.filter.htmlDocument'), extensions: ['html'] }]
     });
     if (!filePath) return;
     try {
@@ -278,9 +284,12 @@ const AppAppointments = () => {
         documentType: previewState.documentType,
         appointmentId: previewState.appointmentId
       });
-      setToast({ message: 'HTML salvo com sucesso.', severity: 'success' });
+      setToast({ message: t('appointments.toast.htmlSaved'), severity: 'success' });
     } catch (err) {
-      setToast({ message: getErrorMessage(err, 'Falha ao salvar HTML.'), severity: 'error' });
+      setToast({
+        message: getErrorMessage(err, t('appointments.toast.htmlSaveError')),
+        severity: 'error'
+      });
     }
   };
 
@@ -288,13 +297,13 @@ const AppAppointments = () => {
     <Box>
       <Stack direction="row" alignItems="center" justifyContent="space-between" mb={3}>
         <Box>
-          <Typography variant="h4">Atendimentos</Typography>
+          <Typography variant="h4">{t('appointments.title')}</Typography>
           <Typography variant="body2" color="text.secondary">
-            Gere relatórios e pareceres com layout padronizado e exportação em PDF.
+            {t('appointments.subtitle')}
           </Typography>
         </Box>
         <Button variant="contained" onClick={handleOpenForm}>
-          Novo atendimento
+          {t('appointments.new')}
         </Button>
       </Stack>
 
@@ -307,11 +316,11 @@ const AppAppointments = () => {
       <Table>
         <TableHead>
           <TableRow>
-            <TableCell>Cliente</TableCell>
-            <TableCell>CPF/CNPJ</TableCell>
-            <TableCell>Assunto</TableCell>
-            <TableCell>Data</TableCell>
-            <TableCell align="right">Ações</TableCell>
+            <TableCell>{t('appointments.table.client')}</TableCell>
+            <TableCell>{t('appointments.table.document')}</TableCell>
+            <TableCell>{t('appointments.table.subject')}</TableCell>
+            <TableCell>{t('appointments.table.date')}</TableCell>
+            <TableCell align="right">{t('appointments.table.actions')}</TableCell>
           </TableRow>
         </TableHead>
         <TableBody>
@@ -328,14 +337,14 @@ const AppAppointments = () => {
                     variant="outlined"
                     onClick={() => handleGenerate(appointment.id, 'RELATORIO')}
                   >
-                    Gerar relatório
+                    {t('appointments.button.generateReport')}
                   </Button>
                   <Button
                     size="small"
                     variant="contained"
                     onClick={() => handleGenerate(appointment.id, 'PARECER')}
                   >
-                    Gerar parecer
+                    {t('appointments.button.generateOpinion')}
                   </Button>
                 </Stack>
               </TableCell>
@@ -344,7 +353,7 @@ const AppAppointments = () => {
           {appointments.length === 0 && (
             <TableRow>
               <TableCell colSpan={5} align="center">
-                Nenhum atendimento registrado.
+                {t('appointments.empty')}
               </TableCell>
             </TableRow>
           )}
@@ -352,11 +361,11 @@ const AppAppointments = () => {
       </Table>
 
       <Dialog open={isFormOpen} onClose={() => setIsFormOpen(false)} maxWidth="md" fullWidth>
-        <DialogTitle>Novo atendimento</DialogTitle>
+        <DialogTitle>{t('appointments.dialog.new')}</DialogTitle>
         <DialogContent>
           <Stack spacing={2} mt={1}>
             <TextField
-              label="Nome do cliente"
+              label={t('appointments.form.clientName')}
               value={formState.clientName}
               onChange={(event) =>
                 setFormState((prev) => ({ ...prev, clientName: event.target.value }))
@@ -365,7 +374,7 @@ const AppAppointments = () => {
             />
             <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}>
               <TextField
-                label="CPF/CNPJ"
+                label={t('appointments.form.document')}
                 value={formatCpfCnpj(formState.clientDocument)}
                 onChange={(event) =>
                   setFormState((prev) => ({ ...prev, clientDocument: event.target.value }))
@@ -373,7 +382,7 @@ const AppAppointments = () => {
                 fullWidth
               />
               <TextField
-                label="Data do atendimento"
+                label={t('appointments.form.date')}
                 type="date"
                 value={formState.attendanceDate}
                 onChange={(event) =>
@@ -385,7 +394,7 @@ const AppAppointments = () => {
             </Stack>
             <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}>
               <TextField
-                label="Email"
+                label={t('appointments.form.email')}
                 value={formState.clientEmail}
                 onChange={(event) =>
                   setFormState((prev) => ({ ...prev, clientEmail: event.target.value }))
@@ -393,7 +402,7 @@ const AppAppointments = () => {
                 fullWidth
               />
               <TextField
-                label="Telefone"
+                label={t('appointments.form.phone')}
                 value={formState.clientPhone}
                 onChange={(event) =>
                   setFormState((prev) => ({ ...prev, clientPhone: event.target.value }))
@@ -402,13 +411,13 @@ const AppAppointments = () => {
               />
             </Stack>
             <TextField
-              label="Assunto"
+              label={t('appointments.form.subject')}
               value={formState.title}
               onChange={(event) => setFormState((prev) => ({ ...prev, title: event.target.value }))}
               fullWidth
             />
             <TextField
-              label="Histórico"
+              label={t('appointments.form.history')}
               value={formState.history}
               onChange={(event) =>
                 setFormState((prev) => ({ ...prev, history: event.target.value }))
@@ -418,7 +427,7 @@ const AppAppointments = () => {
               fullWidth
             />
             <TextField
-              label="Análise"
+              label={t('appointments.form.analysis')}
               value={formState.analysis}
               onChange={(event) =>
                 setFormState((prev) => ({ ...prev, analysis: event.target.value }))
@@ -428,7 +437,7 @@ const AppAppointments = () => {
               fullWidth
             />
             <TextField
-              label="Conclusão"
+              label={t('appointments.form.conclusion')}
               value={formState.conclusion}
               onChange={(event) =>
                 setFormState((prev) => ({ ...prev, conclusion: event.target.value }))
@@ -440,9 +449,9 @@ const AppAppointments = () => {
           </Stack>
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setIsFormOpen(false)}>Cancelar</Button>
+          <Button onClick={() => setIsFormOpen(false)}>{t('common.cancel')}</Button>
           <Button variant="contained" onClick={handleSubmit} disabled={isLoading}>
-            Salvar
+            {t('common.save')}
           </Button>
         </DialogActions>
       </Dialog>
@@ -455,15 +464,17 @@ const AppAppointments = () => {
       >
         <DialogTitle>
           {previewState
-            ? `Prévia - ${getDocumentTitle(previewState.documentType)}`
-            : 'Prévia'}
+            ? `${t('appointments.preview.titleWithType')} ${getDocumentTitle(
+                previewState.documentType
+              )}`
+            : t('appointments.preview.title')}
         </DialogTitle>
         <DialogContent>
           {previewState && (
             <Box sx={{ height: '70vh' }}>
               <iframe
                 ref={previewFrameRef}
-                title="Prévia do documento"
+                title={t('appointments.preview.iframeTitle')}
                 style={{ width: '100%', height: '100%', border: '1px solid #e0e0e0' }}
                 srcDoc={previewState.html}
               />
@@ -471,9 +482,9 @@ const AppAppointments = () => {
           )}
         </DialogContent>
         <DialogActions>
-          <Button onClick={handleExportHtml}>Salvar HTML</Button>
+          <Button onClick={handleExportHtml}>{t('appointments.preview.saveHtml')}</Button>
           <Button variant="contained" onClick={handleExportPdf}>
-            Exportar PDF
+            {t('appointments.preview.exportPdf')}
           </Button>
         </DialogActions>
       </Dialog>

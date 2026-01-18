@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Alert, Box, Snackbar, Typography } from '@mui/material';
 import { useLocation } from 'react-router-dom';
+import { t } from '../i18n';
 import { useAuth } from '../state/auth';
 
 type LocationState = { noPermission?: boolean };
@@ -20,10 +21,11 @@ const AppHome = () => {
   return (
     <Box>
       <Typography variant="h4" gutterBottom>
-        Home
+        {t('home.title')}
       </Typography>
       <Typography variant="body1" color="text.secondary">
-        Sessão ativa para {user?.name ?? 'Usuário'} ({user?.email}).
+        {t('home.activeSessionPrefix')} {user?.name ?? t('home.defaultUser')} (
+        {user?.email}).
       </Typography>
       <Snackbar
         open={showToast}
@@ -32,7 +34,7 @@ const AppHome = () => {
         anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
       >
         <Alert severity="warning" variant="filled">
-          Sem permissão
+          {t('app.noPermission')}
         </Alert>
       </Snackbar>
     </Box>

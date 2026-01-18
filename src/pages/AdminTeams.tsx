@@ -22,9 +22,17 @@ import {
   Typography
 } from '@mui/material';
 import { useAuth } from '../state/auth';
-import { teamsCreate, teamsDelete, teamsList, teamsSetMembers, teamsUpdate, type Team } from '../api/teams';
+import {
+  teamsCreate,
+  teamsDelete,
+  teamsList,
+  teamsSetMembers,
+  teamsUpdate,
+  type Team
+} from '../api/teams';
 import { usersList, type UserSummary } from '../api/users';
 import { getErrorMessage } from '../api/errors';
+import { t } from '../i18n';
 
 type ToastState = {
   message: string;
@@ -70,7 +78,7 @@ const AdminTeams = () => {
       setTeams(teamsData);
       setUsers(usersData);
     } catch (err) {
-      setError(getErrorMessage(err, 'Falha ao carregar equipes.'));
+      setError(getErrorMessage(err, t('teams.error.load')));
     } finally {
       setIsLoading(false);
     }
@@ -110,7 +118,7 @@ const AdminTeams = () => {
           leadUserId: teamForm.leadUserId || undefined,
           memberUserIds: teamForm.memberUserIds
         });
-        setToast({ message: 'Equipe criada.', severity: 'success' });
+        setToast({ message: t('teams.toast.created'), severity: 'success' });
       } else if (teamForm.id) {
         await teamsUpdate(sessionId, teamForm.id, {
           name: teamForm.name,
@@ -118,13 +126,13 @@ const AdminTeams = () => {
           leadUserId: teamForm.leadUserId || undefined
         });
         await teamsSetMembers(sessionId, teamForm.id, teamForm.memberUserIds);
-        setToast({ message: 'Equipe atualizada.', severity: 'success' });
+        setToast({ message: t('teams.toast.updated'), severity: 'success' });
       }
       setIsFormOpen(false);
       await loadData();
     } catch (err) {
       setToast({
-        message: getErrorMessage(err, 'Falha ao salvar equipe.'),
+        message: getErrorMessage(err, t('teams.toast.saveError')),
         severity: 'error'
       });
     }
@@ -134,12 +142,12 @@ const AdminTeams = () => {
     if (!sessionId || !deleteTarget) return;
     try {
       await teamsDelete(sessionId, deleteTarget.id);
-      setToast({ message: 'Equipe removida.', severity: 'success' });
+      setToast({ message: t('teams.toast.removed'), severity: 'success' });
       setDeleteTarget(null);
       await loadData();
     } catch (err) {
       setToast({
-        message: getErrorMessage(err, 'Falha ao remover equipe.'),
+        message: getErrorMessage(err, t('teams.toast.removeError')),
         severity: 'error'
       });
     }
@@ -152,10 +160,10 @@ const AdminTeams = () => {
       <Stack spacing={2}>
         <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} alignItems="center">
           <Typography variant="h4" sx={{ flexGrow: 1 }}>
-            Equipes
+            {t('teams.title')}
           </Typography>
           <Button variant="contained" onClick={openCreateForm}>
-            Nova equipe
+            {t('teams.new')}
           </Button>
         </Stack>
 
@@ -164,10 +172,10 @@ const AdminTeams = () => {
         <Table size="small">
           <TableHead>
             <TableRow>
-              <TableCell>Equipe</TableCell>
-              <TableCell>Responsável</TableCell>
-              <TableCell>Membros</TableCell>
-              <TableCell align="right">Ações</TableCell>
+              <TableCell>{t('teams.table.team')}</TableCell>
+              <TableCell>{t('teams.table.lead')}</TableCell>
+              <TableCell>{t('teams.table.members')}</TableCell>
+              <TableCell align="right">{t('teams.table.actions')}</TableCell>
             </TableRow>
           </TableHead>
           <TableBody>
@@ -176,19 +184,19 @@ const AdminTeams = () => {
                 <TableCell>
                   <Typography fontWeight={600}>{team.name}</Typography>
                   <Typography variant="body2" color="text.secondary">
-                    {team.description || 'Sem descrição'}
+                    {team.description || t('teams.noDescription')}
                   </Typography>
                 </TableCell>
                 <TableCell>
                   {team.leadName
-                    ? `${team.leadName} (${team.leadEmail ?? 'sem email'})`
-                    : 'Não definido'}
+                    ? `${team.leadName} (${team.leadEmail ?? t('teams.noEmail')})`
+                    : t('teams.notDefined')}
                 </TableCell>
                 <TableCell>{team.memberCount}</TableCell>
                 <TableCell align="right">
                   <Stack direction="row" spacing={1} justifyContent="flex-end">
                     <Button size="small" variant="outlined" onClick={() => openEditForm(team)}>
-                      Editar
+                      {t('common.edit')}
                     </Button>
                     <Button
                       size="small"
@@ -196,7 +204,7 @@ const AdminTeams = () => {
                       color="error"
                       onClick={() => setDeleteTarget(team)}
                     >
-                      Remover
+                      {t('common.remove')}
                     </Button>
                   </Stack>
                 </TableCell>
@@ -205,7 +213,7 @@ const AdminTeams = () => {
             {!isLoading && teams.length === 0 && (
               <TableRow>
                 <TableCell colSpan={4} align="center">
-                  Nenhuma equipe cadastrada.
+                  {t('teams.empty')}
                 </TableCell>
               </TableRow>
             )}
@@ -214,17 +222,19 @@ const AdminTeams = () => {
       </Stack>
 
       <Dialog open={isFormOpen} onClose={() => setIsFormOpen(false)} fullWidth maxWidth="sm">
-        <DialogTitle>{formMode === 'create' ? 'Nova equipe' : 'Editar equipe'}</DialogTitle>
+        <DialogTitle>
+          {formMode === 'create' ? t('teams.dialog.new') : t('teams.dialog.edit')}
+        </DialogTitle>
         <DialogContent>
           <Stack spacing={2} mt={1}>
             <TextField
-              label="Nome"
+              label={t('common.name')}
               value={teamForm.name}
               onChange={(event) => setTeamForm((prev) => ({ ...prev, name: event.target.value }))}
               fullWidth
             />
             <TextField
-              label="Descrição"
+              label={t('teams.form.description')}
               value={teamForm.description}
               onChange={(event) =>
                 setTeamForm((prev) => ({ ...prev, description: event.target.value }))
@@ -232,15 +242,15 @@ const AdminTeams = () => {
               fullWidth
             />
             <FormControl fullWidth>
-              <InputLabel>Responsável</InputLabel>
+              <InputLabel>{t('teams.form.lead')}</InputLabel>
               <Select
                 value={teamForm.leadUserId}
-                label="Responsável"
+                label={t('teams.form.lead')}
                 onChange={(event) =>
                   setTeamForm((prev) => ({ ...prev, leadUserId: event.target.value }))
                 }
               >
-                <MenuItem value="">Sem responsável</MenuItem>
+                <MenuItem value="">{t('teams.form.noLead')}</MenuItem>
                 {leadOptions.map((user) => (
                   <MenuItem key={user.id} value={user.id}>
                     {user.name} ({user.email})
@@ -249,11 +259,11 @@ const AdminTeams = () => {
               </Select>
             </FormControl>
             <FormControl fullWidth>
-              <InputLabel>Membros</InputLabel>
+              <InputLabel>{t('teams.form.members')}</InputLabel>
               <Select
                 multiple
                 value={teamForm.memberUserIds}
-                label="Membros"
+                label={t('teams.form.members')}
                 onChange={(event) =>
                   setTeamForm((prev) => ({
                     ...prev,
@@ -279,24 +289,24 @@ const AdminTeams = () => {
           </Stack>
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setIsFormOpen(false)}>Cancelar</Button>
+          <Button onClick={() => setIsFormOpen(false)}>{t('common.cancel')}</Button>
           <Button variant="contained" onClick={handleSubmit}>
-            Salvar
+            {t('common.save')}
           </Button>
         </DialogActions>
       </Dialog>
 
       <Dialog open={!!deleteTarget} onClose={() => setDeleteTarget(null)}>
-        <DialogTitle>Remover equipe</DialogTitle>
+        <DialogTitle>{t('teams.dialog.removeTitle')}</DialogTitle>
         <DialogContent>
           <Typography>
-            Tem certeza que deseja remover a equipe {deleteTarget?.name}?
+            {t('teams.dialog.removeConfirm')} {deleteTarget?.name}?
           </Typography>
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setDeleteTarget(null)}>Cancelar</Button>
+          <Button onClick={() => setDeleteTarget(null)}>{t('common.cancel')}</Button>
           <Button variant="contained" color="error" onClick={handleDelete}>
-            Remover
+            {t('common.remove')}
           </Button>
         </DialogActions>
       </Dialog>
