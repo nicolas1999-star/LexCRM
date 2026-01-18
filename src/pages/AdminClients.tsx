@@ -21,6 +21,7 @@ import {
   TextField,
   Typography
 } from '@mui/material';
+import { useNavigate } from 'react-router-dom';
 import { Link } from 'react-router-dom';
 import { useAuth } from '../state/auth';
 import {
@@ -93,6 +94,7 @@ const getStatusLabel = (status: ClientStatus) => (status === 'ACTIVE' ? 'Ativo' 
 
 const AdminClients = () => {
   const { sessionId } = useAuth();
+  const navigate = useNavigate();
   const [filters, setFilters] = useState({
     q: '',
     type: '',
@@ -330,6 +332,9 @@ const AdminClients = () => {
                     <Button
                       size="small"
                       variant="outlined"
+                      onClick={() => navigate(`/admin/clients/${client.id}`)}
+                    >
+                      Processos
                       component={Link}
                       to={`/clients/${client.id}`}
                     >
