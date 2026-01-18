@@ -39,12 +39,15 @@ export const attendancesCreate = async (
 
 export const attendancesUpdate = async (
   sessionId: string,
-  id: string,
+  attendanceId: string,
   payload: AttendancePayload
 ): Promise<AttendanceDetail> => {
-  return invoke('attendances_update', { sessionId, id, payload });
+  return invoke('attendances_update', { sessionId, attendanceId, payload });
 };
 
-export const attendancesDelete = async (sessionId: string, id: string): Promise<void> => {
-  return invoke('attendances_delete', { sessionId, id });
+export const attendancesDelete = async (
+  sessionId: string,
+  attendanceId: string
+): Promise<void> => {
+  return invoke('attendances_delete', { sessionId, attendanceId });
 };
