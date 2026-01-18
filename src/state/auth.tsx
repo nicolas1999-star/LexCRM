@@ -18,6 +18,8 @@ export type User = {
   role: Role;
   status: string;
   lastLoginAt?: string | null;
+  oabNumber?: string | null;
+  oabUf?: string | null;
 };
 
 export type Session = {

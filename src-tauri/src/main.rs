@@ -81,6 +81,8 @@ struct UserInfo {
   role: String,
   status: String,
   last_login_at: Option<String>,
+  oab_number: Option<String>,
+  oab_uf: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -110,6 +112,8 @@ struct UserSummary {
   created_at: String,
   updated_at: String,
   last_login_at: Option<String>,
+  oab_number: Option<String>,
+  oab_uf: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -123,6 +127,8 @@ struct UserDetail {
   created_at: String,
   updated_at: String,
   last_login_at: Option<String>,
+  oab_number: Option<String>,
+  oab_uf: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -377,6 +383,8 @@ struct CreateUserPayload {
   email: String,
   role: String,
   password_initial: String,
+  oab_number: Option<String>,
+  oab_uf: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -385,6 +393,8 @@ struct UpdateUserPayload {
   name: String,
   email: String,
   role: String,
+  oab_number: Option<String>,
+  oab_uf: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -420,49 +430,48 @@ fn normalize_html_for_hash(html: &str) -> String {
   html.replace("\r\n", "\n").replace('\r', "\n").trim_end().to_string()
 }
 
+fn normalize_optional_field(value: Option<String>) -> Option<String> {
+  value.and_then(|input| {
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+      None
+    } else {
+      Some(trimmed.to_string())
+    }
+  })
+}
+
 fn sha256_hex(data: &[u8]) -> String {
   let mut hasher = Sha256::new();
   hasher.update(data);
   hex::encode(hasher.finalize())
 }
 
-fn build_canonical_string(
-  version: &str,
-  document_type: &str,
-  office_name: &str,
-  client_id: &str,
-  authored_by_user_id: &str,
-  created_at: &str,
-  content_hash: &str,
-) -> String {
-  format!(
-    "v={}\ndocument_type={}\noffice_name={}\nclient_id={}\nauthored_by_user_id={}\ncreated_at={}\ncontent_hash={}",
-    version,
-    document_type,
-    office_name,
-    client_id,
-    authored_by_user_id,
-    created_at,
-    content_hash
-  )
-}
-
 fn build_signature_block(
   authored_by_user_name: &str,
-  authored_by_oab: Option<&str>,
+  authored_by_oab: &str,
   office_name: &str,
   created_at: &str,
-  document_hash: &str,
+  document_hash: Option<&str>,
 ) -> String {
-  let oab_value = authored_by_oab.map(|value| format!(" {}", value)).unwrap_or_default();
+  let hash_block = document_hash
+    .map(|hash| {
+      format!(
+        "<h3>Hash SHA-256 do conteúdo final</h3>
+  <p class=\"document-hash\">{}</p>",
+        hash
+      )
+    })
+    .unwrap_or_default();
   format!(
-    "<footer class=\"document-signature\">
-  <p>Assinado digitalmente por: {}{}</p>
+    "<section class=\"document-signature\">
+  <h2>Assinatura do advogado</h2>
+  <p>Assinado digitalmente por: {} ({})</p>
   <p>Escritório: {}</p>
   <p>Data: {}</p>
-  <p>Hash do documento: {}</p>
-</footer>",
-    authored_by_user_name, oab_value, office_name, created_at, document_hash
+  {}
+</section>",
+    authored_by_user_name, authored_by_oab, office_name, created_at, hash_block
   )
 }
 
@@ -631,6 +640,13 @@ fn run_migrations(conn: &Connection) -> AppResult<()> {
       CREATE INDEX IF NOT EXISTS idx_docsign_docid ON DOCUMENT_SIGNATURES(document_id);
       ",
     ),
+    (
+      "0006_user_oab_fields",
+      "\
+      ALTER TABLE USERS ADD COLUMN oab_number TEXT;
+      ALTER TABLE USERS ADD COLUMN oab_uf TEXT;
+      ",
+    ),
   ];
 
   for (id, sql) in migrations {
@@ -703,17 +719,42 @@ fn require_active_session(conn: &Connection, session_id: &str) -> AppResult<Sess
   Ok(session)
 }
 
-fn fetch_user_name(conn: &Connection, user_id: &str) -> AppResult<String> {
-  let mut stmt = conn.prepare("SELECT name FROM USERS WHERE id = ?1")?;
-  stmt
-    .query_row(params![user_id], |row| row.get::<_, String>(0))
-    .map_err(|_| AppError::new("not_found", "Usuário não encontrado."))
+fn fetch_user_signature_info(
+  conn: &Connection,
+  user_id: &str,
+) -> AppResult<(String, String, String)> {
+  let mut stmt = conn.prepare(
+    "SELECT name, oab_number, oab_uf FROM USERS WHERE id = ?1",
+  )?;
+  let row = stmt.query_row(params![user_id], |row| {
+    Ok((
+      row.get::<_, String>(0)?,
+      row.get::<_, Option<String>>(1)?,
+      row.get::<_, Option<String>>(2)?,
+    ))
+  });
+  let (name, oab_number, oab_uf) = match row {
+    Ok(row) => row,
+    Err(rusqlite::Error::QueryReturnedNoRows) => {
+      return Err(AppError::new("not_found", "Usuário não encontrado."))
+    }
+    Err(err) => return Err(err.into()),
+  };
+  let oab_number = normalize_optional_field(oab_number);
+  let oab_uf = normalize_optional_field(oab_uf);
+  match (oab_number, oab_uf) {
+    (Some(number), Some(uf)) => Ok((name, number, uf)),
+    _ => Err(AppError::new(
+      "missing_oab",
+      "Informe a OAB (número e UF) para assinar documentos.",
+    )),
+  }
 }
 
 fn require_admin_session(conn: &Connection, session_id: &str) -> AppResult<UserInfo> {
   let session = require_active_session(conn, session_id)?;
   let mut stmt = conn.prepare(
-    "SELECT id, name, email, role, status, last_login_at FROM USERS WHERE id = ?1",
+    "SELECT id, name, email, role, status, last_login_at, oab_number, oab_uf FROM USERS WHERE id = ?1",
   )?;
   let user = stmt.query_row(params![session.user_id], |row| {
     Ok(UserInfo {
@@ -723,6 +764,8 @@ fn require_admin_session(conn: &Connection, session_id: &str) -> AppResult<UserI
       role: row.get(3)?,
       status: row.get(4)?,
       last_login_at: row.get(5)?,
+      oab_number: row.get(6)?,
+      oab_uf: row.get(7)?,
     })
   });
 
@@ -980,6 +1023,8 @@ fn auth_create_initial_admin(
       role: "ADMIN".to_string(),
       status: "ACTIVE".to_string(),
       last_login_at: None,
+      oab_number: None,
+      oab_uf: None,
     },
     session,
   })
@@ -1014,7 +1059,7 @@ fn auth_login(
 
   let email_lookup = payload.email.trim().to_lowercase();
   let mut stmt = conn.prepare(
-    "SELECT id, name, email, role, status, password_hash FROM USERS WHERE email = ?1",
+    "SELECT id, name, email, role, status, password_hash, oab_number, oab_uf FROM USERS WHERE email = ?1",
   )?;
   let result = stmt.query_row(params![email_lookup], |row| {
     Ok((
@@ -1024,10 +1069,12 @@ fn auth_login(
       row.get::<_, String>(3)?,
       row.get::<_, String>(4)?,
       row.get::<_, String>(5)?,
+      row.get::<_, Option<String>>(6)?,
+      row.get::<_, Option<String>>(7)?,
     ))
   });
 
-  let (id, name, email, role, status, password_hash) = match result {
+  let (id, name, email, role, status, password_hash, oab_number, oab_uf) = match result {
     Ok(row) => row,
     Err(rusqlite::Error::QueryReturnedNoRows) => {
       return Err(AppError::new("auth_invalid", "Credenciais inválidas."))
@@ -1064,6 +1111,8 @@ fn auth_login(
       role,
       status,
       last_login_at: Some(now),
+      oab_number,
+      oab_uf,
     },
     session,
   })
@@ -1136,7 +1185,8 @@ fn users_list(
   require_admin_session(&conn, &session_id)?;
 
   let mut sql = String::from(
-    "SELECT id, name, email, role, status, created_at, updated_at, last_login_at FROM USERS WHERE 1=1",
+    "SELECT id, name, email, role, status, created_at, updated_at, last_login_at, oab_number, oab_uf \
+     FROM USERS WHERE 1=1",
   );
   let mut params: Vec<String> = Vec::new();
 
@@ -1170,6 +1220,8 @@ fn users_list(
       created_at: row.get(5)?,
       updated_at: row.get(6)?,
       last_login_at: row.get(7)?,
+      oab_number: row.get(8)?,
+      oab_uf: row.get(9)?,
     })
   })?;
 
@@ -1194,7 +1246,8 @@ fn users_get(
   require_admin_session(&conn, &session_id)?;
 
   let mut stmt = conn.prepare(
-    "SELECT id, name, email, role, status, created_at, updated_at, last_login_at FROM USERS WHERE id = ?1",
+    "SELECT id, name, email, role, status, created_at, updated_at, last_login_at, oab_number, oab_uf \
+     FROM USERS WHERE id = ?1",
   )?;
   let user = stmt.query_row(params![id], |row| {
     Ok(UserDetail {
@@ -1206,6 +1259,8 @@ fn users_get(
       created_at: row.get(5)?,
       updated_at: row.get(6)?,
       last_login_at: row.get(7)?,
+      oab_number: row.get(8)?,
+      oab_uf: row.get(9)?,
     })
   });
 
@@ -1244,11 +1299,14 @@ fn users_create(
   }
 
   let (password_hash, password_salt) = hash_password(&payload.password_initial)?;
+  let oab_number = normalize_optional_field(payload.oab_number);
+  let oab_uf = normalize_optional_field(payload.oab_uf);
   let now = now_iso();
   let user_id = Uuid::new_v4().to_string();
   conn.execute(
-    "INSERT INTO USERS (id, name, email, role, status, password_hash, password_salt, created_at, updated_at)
-     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+    "INSERT INTO USERS (id, name, email, role, status, password_hash, password_salt, created_at, updated_at,
+     oab_number, oab_uf)
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
     params![
       user_id,
       name,
@@ -1258,7 +1316,9 @@ fn users_create(
       password_hash,
       password_salt,
       now,
-      now
+      now,
+      oab_number,
+      oab_uf
     ],
   )?;
 
@@ -1281,6 +1341,8 @@ fn users_create(
     created_at: now.clone(),
     updated_at: now,
     last_login_at: None,
+    oab_number,
+    oab_uf,
   })
 }
 
@@ -1298,7 +1360,7 @@ fn users_update(
   let admin = require_admin_session(&conn, &session_id)?;
 
   let mut stmt = conn.prepare(
-    "SELECT role, status, created_at, last_login_at FROM USERS WHERE id = ?1",
+    "SELECT role, status, created_at, last_login_at, oab_number, oab_uf FROM USERS WHERE id = ?1",
   )?;
   let current = stmt.query_row(params![id.clone()], |row| {
     Ok((
@@ -1306,19 +1368,24 @@ fn users_update(
       row.get::<_, String>(1)?,
       row.get::<_, String>(2)?,
       row.get::<_, Option<String>>(3)?,
+      row.get::<_, Option<String>>(4)?,
+      row.get::<_, Option<String>>(5)?,
     ))
   });
-  let (current_role, current_status, created_at, last_login_at) = match current {
-    Ok(row) => row,
-    Err(rusqlite::Error::QueryReturnedNoRows) => {
-      return Err(AppError::new("not_found", "Usuário não encontrado."))
-    }
-    Err(err) => return Err(err.into()),
-  };
+  let (current_role, current_status, created_at, last_login_at, _current_oab_number, _current_oab_uf) =
+    match current {
+      Ok(row) => row,
+      Err(rusqlite::Error::QueryReturnedNoRows) => {
+        return Err(AppError::new("not_found", "Usuário não encontrado."))
+      }
+      Err(err) => return Err(err.into()),
+    };
 
   let name = payload.name.trim().to_string();
   let email = payload.email.trim().to_lowercase();
   let role = payload.role.trim().to_uppercase();
+  let oab_number = normalize_optional_field(payload.oab_number);
+  let oab_uf = normalize_optional_field(payload.oab_uf);
 
   let exists: Option<String> = conn
     .query_row(
@@ -1343,8 +1410,9 @@ fn users_update(
 
   let now = now_iso();
   conn.execute(
-    "UPDATE USERS SET name = ?1, email = ?2, role = ?3, updated_at = ?4 WHERE id = ?5",
-    params![name, email, role, now, id],
+    "UPDATE USERS SET name = ?1, email = ?2, role = ?3, updated_at = ?4, oab_number = ?5, oab_uf = ?6 \
+     WHERE id = ?7",
+    params![name, email, role, now, oab_number, oab_uf, id],
   )?;
 
   insert_audit_log(
@@ -1366,6 +1434,8 @@ fn users_update(
     created_at,
     updated_at: now,
     last_login_at,
+    oab_number,
+    oab_uf,
   })
 }
 
@@ -1383,7 +1453,8 @@ fn users_set_status(
   let admin = require_admin_session(&conn, &session_id)?;
 
   let mut stmt = conn.prepare(
-    "SELECT name, email, role, status, created_at, updated_at, last_login_at FROM USERS WHERE id = ?1",
+    "SELECT name, email, role, status, created_at, updated_at, last_login_at, oab_number, oab_uf \
+     FROM USERS WHERE id = ?1",
   )?;
   let current = stmt.query_row(params![id.clone()], |row| {
     Ok((
@@ -1394,17 +1465,28 @@ fn users_set_status(
       row.get::<_, String>(4)?,
       row.get::<_, String>(5)?,
       row.get::<_, Option<String>>(6)?,
+      row.get::<_, Option<String>>(7)?,
+      row.get::<_, Option<String>>(8)?,
     ))
   });
 
-  let (name, email, role, current_status, created_at, _updated_at, last_login_at) =
-    match current {
-      Ok(row) => row,
-      Err(rusqlite::Error::QueryReturnedNoRows) => {
-        return Err(AppError::new("not_found", "Usuário não encontrado."))
-      }
-      Err(err) => return Err(err.into()),
-    };
+  let (
+    name,
+    email,
+    role,
+    current_status,
+    created_at,
+    _updated_at,
+    last_login_at,
+    oab_number,
+    oab_uf,
+  ) = match current {
+    Ok(row) => row,
+    Err(rusqlite::Error::QueryReturnedNoRows) => {
+      return Err(AppError::new("not_found", "Usuário não encontrado."))
+    }
+    Err(err) => return Err(err.into()),
+  };
 
   let next_status = status.trim().to_uppercase();
   if current_status == "ACTIVE" && next_status != "ACTIVE" && role == "ADMIN" {
@@ -1442,6 +1524,8 @@ fn users_set_status(
     created_at,
     updated_at: now,
     last_login_at,
+    oab_number,
+    oab_uf,
   })
 }
 
@@ -2139,10 +2223,11 @@ fn documents_generate_html(
   let conn = open_connection(&path)?;
   run_migrations(&conn)?;
   let user = require_active_session(&conn, &session_id)?;
-  let user_name = fetch_user_name(&conn, &user.user_id)?;
+  let (user_name, oab_number, oab_uf) = fetch_user_signature_info(&conn, &user.user_id)?;
   let created_at = now_iso();
   let document_id = Uuid::new_v4().to_string();
   let signature_id = Uuid::new_v4().to_string();
+  let authored_by_oab = format!("OAB/{} {}", oab_uf, oab_number);
 
   let html_base = format!(
     "<!doctype html>
@@ -2154,8 +2239,11 @@ fn documents_generate_html(
     body {{ font-family: Arial, sans-serif; margin: 40px; color: #111; }}
     h1 {{ font-size: 22px; margin-bottom: 4px; }}
     h2 {{ font-size: 16px; margin-top: 24px; }}
+    h3 {{ font-size: 14px; margin-top: 16px; }}
     .meta {{ color: #555; font-size: 12px; }}
     .section {{ margin-top: 16px; white-space: pre-wrap; }}
+    .document-signature {{ margin-top: 32px; padding-top: 16px; border-top: 1px solid #ddd; }}
+    .document-hash {{ font-family: monospace; }}
   </style>
 </head>
 <body>
@@ -2163,9 +2251,9 @@ fn documents_generate_html(
   <div class=\"meta\">{}</div>
   <div class=\"meta\">Cliente: {} ({})</div>
   <div class=\"meta\">Data do atendimento: {}</div>
-  <h2>Histórico</h2>
+  <h2>Histórico dos fatos</h2>
   <div class=\"section\">{}</div>
-  <h2>Análise</h2>
+  <h2>Análise jurídica</h2>
   <div class=\"section\">{}</div>
   <h2>Conclusão</h2>
   <div class=\"section\">{}</div>
@@ -2182,26 +2270,24 @@ fn documents_generate_html(
     payload.conclusion
   );
 
-  let normalized_html = normalize_html_for_hash(&html_base);
-  let content_hash = sha256_hex(normalized_html.as_bytes());
   let document_type = payload.document_type.as_str();
-  let canonical_string = build_canonical_string(
-    "v1",
-    document_type,
+  let signature_block_for_hash = build_signature_block(
+    &user_name,
+    &authored_by_oab,
     &payload.office_name,
-    &payload.client_id,
-    &user.user_id,
     &created_at,
-    &content_hash,
+    None,
   );
-  let document_hash = sha256_hex(canonical_string.as_bytes());
-  let authored_by_oab: Option<String> = None;
+  let signed_html_for_hash = inject_signature_block(&html_base, &signature_block_for_hash);
+  let normalized_html = normalize_html_for_hash(&signed_html_for_hash);
+  let document_hash = sha256_hex(normalized_html.as_bytes());
+  let content_hash = sha256_hex(normalize_html_for_hash(&html_base).as_bytes());
   let signature_block = build_signature_block(
     &user_name,
-    authored_by_oab.as_deref(),
+    &authored_by_oab,
     &payload.office_name,
     &created_at,
-    &document_hash,
+    Some(&document_hash),
   );
   let signed_html = inject_signature_block(&html_base, &signature_block);
 
@@ -2250,7 +2336,7 @@ fn documents_generate_html(
     content_hash,
     created_at,
     authored_by_name: user_name,
-    authored_by_oab,
+    authored_by_oab: Some(authored_by_oab),
   })
 }
 
