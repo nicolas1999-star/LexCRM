@@ -39,6 +39,7 @@ import {
   type AttendanceSummary,
 } from '../api/attendances';
 import { getErrorMessage } from '../api/errors';
+import { t } from '../i18n';
 
 
 type ToastState = {
@@ -63,21 +64,21 @@ const channelOptions: AttendanceChannel[] = [
 ];
 
 const channelLabels: Record<AttendanceChannel, string> = {
-  PRESENCIAL: 'Presencial',
-  WHATSAPP: 'WhatsApp',
-  TELEFONE: 'Telefone',
-  EMAIL: 'Email',
-  VIDEO: 'Vídeo'
+  PRESENCIAL: t('attendance.channel.presencial'),
+  WHATSAPP: t('attendance.channel.whatsapp'),
+  TELEFONE: t('attendance.channel.telefone'),
+  EMAIL: t('attendance.channel.email'),
+  VIDEO: t('attendance.channel.video')
 };
 
 const typeLabels: Record<ClientType, string> = {
-  PF: 'Pessoa Física',
-  PJ: 'Pessoa Jurídica'
+  PF: t('client.type.pf'),
+  PJ: t('client.type.pj')
 };
 
 const statusLabels: Record<ClientStatus, string> = {
-  ACTIVE: 'Ativo',
-  ARCHIVED: 'Arquivado'
+  ACTIVE: t('status.active'),
+  ARCHIVED: t('status.archived')
 };
 
 const formatCpf = (digits: string) => {
@@ -135,8 +136,9 @@ const toIsoFromLocal = (value: string) => {
 };
 
 const ClientDetailPage = () => {
-
   const navigate = useNavigate();
+  const { id } = useParams();
+  const { sessionId } = useAuth();
   const [tabIndex, setTabIndex] = useState(0);
   const [client, setClient] = useState<ClientDetail | null>(null);
   const [clientError, setClientError] = useState<string | null>(null);
@@ -165,7 +167,7 @@ const ClientDetailPage = () => {
       const detail = await clientsGet(sessionId, id);
       setClient(detail);
     } catch (err) {
-      setClientError(getErrorMessage(err, 'Falha ao carregar cliente.'));
+      setClientError(getErrorMessage(err, t('clientDetail.error.loadClient')));
     } finally {
       setIsClientLoading(false);
     }
@@ -179,7 +181,7 @@ const ClientDetailPage = () => {
       const data = await attendancesList(sessionId, id);
       setAttendances(data);
     } catch (err) {
-      setAttendanceError(getErrorMessage(err, 'Falha ao carregar atendimentos.'));
+      setAttendanceError(getErrorMessage(err, t('clientDetail.error.loadAttendances')));
     } finally {
       setIsAttendanceLoading(false);
     }
@@ -219,19 +221,19 @@ const ClientDetailPage = () => {
     if (!sessionId || !id) return;
     const occurredAtIso = toIsoFromLocal(attendanceForm.occurredAt);
     if (!occurredAtIso) {
-      setToast({ message: 'Informe a data/hora do atendimento.', severity: 'error' });
+      setToast({ message: t('clientDetail.toast.dateRequired'), severity: 'error' });
       return;
     }
     if (!attendanceForm.channel) {
-      setToast({ message: 'Selecione o canal do atendimento.', severity: 'error' });
+      setToast({ message: t('clientDetail.toast.channelRequired'), severity: 'error' });
       return;
     }
     if (!attendanceForm.subject.trim()) {
-      setToast({ message: 'Informe o assunto do atendimento.', severity: 'error' });
+      setToast({ message: t('clientDetail.toast.subjectRequired'), severity: 'error' });
       return;
     }
     if (!attendanceForm.notes.trim()) {
-      setToast({ message: 'Informe as notas do atendimento.', severity: 'error' });
+      setToast({ message: t('clientDetail.toast.notesRequired'), severity: 'error' });
       return;
     }
 
@@ -245,15 +247,18 @@ const ClientDetailPage = () => {
     try {
       if (formMode === 'create') {
         await attendancesCreate(sessionId, id, payload);
-        setToast({ message: 'Atendimento criado.', severity: 'success' });
+        setToast({ message: t('clientDetail.toast.created'), severity: 'success' });
       } else if (attendanceForm.id) {
         await attendancesUpdate(sessionId, attendanceForm.id, payload);
-        setToast({ message: 'Atendimento atualizado.', severity: 'success' });
+        setToast({ message: t('clientDetail.toast.updated'), severity: 'success' });
       }
       setIsFormOpen(false);
       await loadAttendances();
     } catch (err) {
-      setToast({ message: getErrorMessage(err, 'Falha ao salvar atendimento.'), severity: 'error' });
+      setToast({
+        message: getErrorMessage(err, t('clientDetail.toast.saveError')),
+        severity: 'error'
+      });
     }
   };
 
@@ -261,11 +266,14 @@ const ClientDetailPage = () => {
     if (!sessionId || !deleteTarget) return;
     try {
       await attendancesDelete(sessionId, deleteTarget.id);
-      setToast({ message: 'Atendimento removido.', severity: 'success' });
+      setToast({ message: t('clientDetail.toast.removed'), severity: 'success' });
       setDeleteTarget(null);
       await loadAttendances();
     } catch (err) {
-      setToast({ message: getErrorMessage(err, 'Falha ao remover atendimento.'), severity: 'error' });
+      setToast({
+        message: getErrorMessage(err, t('clientDetail.toast.removeError')),
+        severity: 'error'
+      });
     }
   };
 
@@ -274,13 +282,15 @@ const ClientDetailPage = () => {
       <Stack spacing={2}>
         <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} alignItems="center">
           <Box sx={{ flexGrow: 1 }}>
-            <Typography variant="h4">Detalhe do cliente</Typography>
+            <Typography variant="h4">{t('clientDetail.title')}</Typography>
             <Typography variant="body2" color="text.secondary">
-              {client ? `${client.name} · ${formatCpfCnpj(client.cpfCnpj)}` : 'Carregando dados'}
+              {client
+                ? `${client.name} · ${formatCpfCnpj(client.cpfCnpj)}`
+                : t('common.loadingData')}
             </Typography>
           </Box>
           <Button variant="outlined" onClick={() => navigate('/admin/clients')}>
-            Voltar para clientes
+            {t('app.backToClients')}
           </Button>
         </Stack>
 
@@ -288,26 +298,26 @@ const ClientDetailPage = () => {
 
         <Paper variant="outlined">
           <Tabs value={tabIndex} onChange={(_, value) => setTabIndex(value)}>
-            <Tab label="Dados" />
-            <Tab label="Atendimentos" />
+            <Tab label={t('clientDetail.tabs.data')} />
+            <Tab label={t('clientDetail.tabs.attendances')} />
           </Tabs>
           <Divider />
           <Box sx={{ p: 3 }}>
             {tabIndex === 0 && (
               <Stack spacing={2}>
-                {isClientLoading && <Typography>Carregando dados do cliente...</Typography>}
+                {isClientLoading && <Typography>{t('common.loadingClientData')}</Typography>}
                 {client && (
                   <Stack spacing={2}>
                     <Stack direction={{ xs: 'column', md: 'row' }} spacing={2}>
                       <Paper variant="outlined" sx={{ p: 2, flex: 1 }}>
                         <Typography variant="subtitle2" color="text.secondary">
-                          Tipo
+                          {t('clientDetail.label.type')}
                         </Typography>
                         <Typography>{typeLabels[client.type]}</Typography>
                       </Paper>
                       <Paper variant="outlined" sx={{ p: 2, flex: 1 }}>
                         <Typography variant="subtitle2" color="text.secondary">
-                          Status
+                          {t('clientDetail.label.status')}
                         </Typography>
                         <Typography>{statusLabels[client.status]}</Typography>
                       </Paper>
@@ -315,33 +325,33 @@ const ClientDetailPage = () => {
                     <Stack direction={{ xs: 'column', md: 'row' }} spacing={2}>
                       <Paper variant="outlined" sx={{ p: 2, flex: 1 }}>
                         <Typography variant="subtitle2" color="text.secondary">
-                          Email
+                          {t('clientDetail.label.email')}
                         </Typography>
-                        <Typography>{client.email || 'Não informado'}</Typography>
+                        <Typography>{client.email || t('common.notInformed')}</Typography>
                       </Paper>
                       <Paper variant="outlined" sx={{ p: 2, flex: 1 }}>
                         <Typography variant="subtitle2" color="text.secondary">
-                          Telefone
+                          {t('clientDetail.label.phone')}
                         </Typography>
-                        <Typography>{client.phone || 'Não informado'}</Typography>
+                        <Typography>{client.phone || t('common.notInformed')}</Typography>
                       </Paper>
                     </Stack>
                     <Paper variant="outlined" sx={{ p: 2 }}>
                       <Typography variant="subtitle2" color="text.secondary">
-                        Observações
+                        {t('clientDetail.label.notes')}
                       </Typography>
-                      <Typography>{client.notes || 'Sem observações.'}</Typography>
+                      <Typography>{client.notes || t('clientDetail.value.noNotes')}</Typography>
                     </Paper>
                     <Stack direction={{ xs: 'column', md: 'row' }} spacing={2}>
                       <Paper variant="outlined" sx={{ p: 2, flex: 1 }}>
                         <Typography variant="subtitle2" color="text.secondary">
-                          Criado em
+                          {t('clientDetail.label.createdAt')}
                         </Typography>
                         <Typography>{formatDateTime(client.createdAt)}</Typography>
                       </Paper>
                       <Paper variant="outlined" sx={{ p: 2, flex: 1 }}>
                         <Typography variant="subtitle2" color="text.secondary">
-                          Última atualização
+                          {t('clientDetail.label.updatedAt')}
                         </Typography>
                         <Typography>{formatDateTime(client.updatedAt)}</Typography>
                       </Paper>
@@ -355,10 +365,10 @@ const ClientDetailPage = () => {
               <Stack spacing={2}>
                 <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} alignItems="center">
                   <Typography variant="h6" sx={{ flexGrow: 1 }}>
-                    Atendimentos
+                    {t('clientDetail.section.attendances')}
                   </Typography>
                   <Button variant="contained" onClick={openCreateForm}>
-                    Novo atendimento
+                    {t('clientDetail.button.newAttendance')}
                   </Button>
                 </Stack>
 
@@ -367,11 +377,11 @@ const ClientDetailPage = () => {
                 <Table size="small">
                   <TableHead>
                     <TableRow>
-                      <TableCell>Data/hora</TableCell>
-                      <TableCell>Canal</TableCell>
-                      <TableCell>Assunto</TableCell>
-                      <TableCell>Notas</TableCell>
-                      <TableCell align="right">Ações</TableCell>
+                      <TableCell>{t('clientDetail.table.dateTime')}</TableCell>
+                      <TableCell>{t('clientDetail.table.channel')}</TableCell>
+                      <TableCell>{t('clientDetail.table.subject')}</TableCell>
+                      <TableCell>{t('clientDetail.table.notes')}</TableCell>
+                      <TableCell align="right">{t('clientDetail.table.actions')}</TableCell>
                     </TableRow>
                   </TableHead>
                   <TableBody>
@@ -388,7 +398,7 @@ const ClientDetailPage = () => {
                               variant="outlined"
                               onClick={() => openEditForm(attendance)}
                             >
-                              Editar
+                              {t('common.edit')}
                             </Button>
                             <Button
                               size="small"
@@ -396,7 +406,7 @@ const ClientDetailPage = () => {
                               color="error"
                               onClick={() => setDeleteTarget(attendance)}
                             >
-                              Remover
+                              {t('common.remove')}
                             </Button>
                           </Stack>
                         </TableCell>
@@ -405,7 +415,7 @@ const ClientDetailPage = () => {
                     {!isAttendanceLoading && attendances.length === 0 && (
                       <TableRow>
                         <TableCell colSpan={5} align="center">
-                          Nenhum atendimento registrado.
+                          {t('clientDetail.emptyAttendances')}
                         </TableCell>
                       </TableRow>
                     )}
@@ -419,12 +429,12 @@ const ClientDetailPage = () => {
 
       <Dialog open={isFormOpen} onClose={() => setIsFormOpen(false)} fullWidth maxWidth="sm">
         <DialogTitle>
-          {formMode === 'create' ? 'Novo atendimento' : 'Editar atendimento'}
+          {formMode === 'create' ? t('clientDetail.dialog.new') : t('clientDetail.dialog.edit')}
         </DialogTitle>
         <DialogContent>
           <Stack spacing={2} mt={1}>
             <TextField
-              label="Data/hora"
+              label={t('clientDetail.form.dateTime')}
               type="datetime-local"
               value={attendanceForm.occurredAt}
               onChange={(event) =>
@@ -434,9 +444,9 @@ const ClientDetailPage = () => {
               InputLabelProps={{ shrink: true }}
             />
             <FormControl fullWidth>
-              <InputLabel>Canal</InputLabel>
+              <InputLabel>{t('clientDetail.form.channel')}</InputLabel>
               <Select
-                label="Canal"
+                label={t('clientDetail.form.channel')}
                 value={attendanceForm.channel}
                 onChange={(event) =>
                   setAttendanceForm((prev) => ({
@@ -453,7 +463,7 @@ const ClientDetailPage = () => {
               </Select>
             </FormControl>
             <TextField
-              label="Assunto"
+              label={t('clientDetail.form.subject')}
               value={attendanceForm.subject}
               onChange={(event) =>
                 setAttendanceForm((prev) => ({ ...prev, subject: event.target.value }))
@@ -461,7 +471,7 @@ const ClientDetailPage = () => {
               fullWidth
             />
             <TextField
-              label="Notas"
+              label={t('clientDetail.form.notes')}
               value={attendanceForm.notes}
               onChange={(event) =>
                 setAttendanceForm((prev) => ({ ...prev, notes: event.target.value }))
@@ -473,22 +483,22 @@ const ClientDetailPage = () => {
           </Stack>
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setIsFormOpen(false)}>Cancelar</Button>
+          <Button onClick={() => setIsFormOpen(false)}>{t('common.cancel')}</Button>
           <Button variant="contained" onClick={handleSaveAttendance}>
-            Salvar
+            {t('common.save')}
           </Button>
         </DialogActions>
       </Dialog>
 
       <Dialog open={!!deleteTarget} onClose={() => setDeleteTarget(null)} fullWidth maxWidth="xs">
-        <DialogTitle>Remover atendimento</DialogTitle>
+        <DialogTitle>{t('clientDetail.dialog.removeTitle')}</DialogTitle>
         <DialogContent>
-          <Typography>Tem certeza que deseja remover este atendimento?</Typography>
+          <Typography>{t('clientDetail.dialog.removeConfirm')}</Typography>
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setDeleteTarget(null)}>Cancelar</Button>
+          <Button onClick={() => setDeleteTarget(null)}>{t('common.cancel')}</Button>
           <Button variant="contained" color="error" onClick={handleDeleteAttendance}>
-            Remover
+            {t('common.remove')}
           </Button>
         </DialogActions>
       </Dialog>

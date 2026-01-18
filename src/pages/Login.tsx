@@ -13,6 +13,7 @@ import {
 import { useLocation, useNavigate } from 'react-router-dom';
 import { authCreateInitialAdmin, authGetBootstrapStatus, authLogin } from '../api/auth';
 import { getErrorMessage } from '../api/errors';
+import { t } from '../i18n';
 import { useAuth } from '../state/auth';
 
 const LoginPage = () => {
@@ -37,7 +38,7 @@ const LoginPage = () => {
         const status = await authGetBootstrapStatus();
         setIsBootstrap(!status.hasAnyUser);
       } catch (err) {
-        setError(getErrorMessage(err, 'Falha ao carregar status.'));
+        setError(getErrorMessage(err, t('login.error.loadStatus')));
       } finally {
         setIsLoading(false);
       }
@@ -70,7 +71,7 @@ const LoginPage = () => {
         navigate('/app');
       }
     } catch (err) {
-      setError(getErrorMessage(err, 'Não foi possível autenticar.'));
+      setError(getErrorMessage(err, t('login.error.auth')));
     }
   };
 
@@ -95,32 +96,32 @@ const LoginPage = () => {
           <Stack spacing={3}>
             <Stack spacing={1}>
               <Typography variant="h4" fontWeight={700}>
-                {isBootstrap ? 'Criar Admin Inicial' : 'Bem-vindo de volta'}
+                {isBootstrap ? t('login.title.bootstrap') : t('login.title.default')}
               </Typography>
               <Typography variant="body2" color="text.secondary">
                 {isBootstrap
-                  ? 'Defina o primeiro administrador para iniciar o LexCRM.'
-                  : 'Entre com suas credenciais para continuar.'}
+                  ? t('login.subtitle.bootstrap')
+                  : t('login.subtitle.default')}
               </Typography>
             </Stack>
             {error && <Alert severity="error">{error}</Alert>}
             {isBootstrap && (
               <TextField
-                label="Nome"
+                label={t('login.label.name')}
                 value={form.name}
                 onChange={handleChange('name')}
                 fullWidth
               />
             )}
             <TextField
-              label="Email"
+              label={t('login.label.email')}
               type="email"
               value={form.email}
               onChange={handleChange('email')}
               fullWidth
             />
             <TextField
-              label="Senha"
+              label={t('login.label.password')}
               type="password"
               value={form.password}
               onChange={handleChange('password')}
@@ -132,7 +133,7 @@ const LoginPage = () => {
               size="large"
               onClick={handleSubmit}
             >
-              {isBootstrap ? 'Criar Admin' : 'Entrar'}
+              {isBootstrap ? t('login.button.createAdmin') : t('login.button.signIn')}
             </Button>
           </Stack>
         </CardContent>

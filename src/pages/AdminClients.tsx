@@ -34,6 +34,7 @@ import {
   type ClientType
 } from '../api/clients';
 import { getErrorMessage } from '../api/errors';
+import { t } from '../i18n';
 
 type ToastState = {
   message: string;
@@ -87,9 +88,10 @@ const formatCpfCnpj = (value: string) => {
 };
 
 const getClientTypeLabel = (type: ClientType) =>
-  type === 'PF' ? 'Pessoa Física' : 'Pessoa Jurídica';
+  type === 'PF' ? t('client.type.pf') : t('client.type.pj');
 
-const getStatusLabel = (status: ClientStatus) => (status === 'ACTIVE' ? 'Ativo' : 'Arquivado');
+const getStatusLabel = (status: ClientStatus) =>
+  status === 'ACTIVE' ? t('status.active') : t('status.archived');
 
 const AdminClients = () => {
   const { sessionId } = useAuth();
@@ -128,7 +130,7 @@ const AdminClients = () => {
       });
       setClients(data);
     } catch (err) {
-      setError(getErrorMessage(err, 'Falha ao carregar clientes.'));
+      setError(getErrorMessage(err, t('clients.error.load')));
     } finally {
       setIsLoading(false);
     }
@@ -171,7 +173,7 @@ const AdminClients = () => {
       setIsFormOpen(true);
     } catch (err) {
       setToast({
-        message: getErrorMessage(err, 'Falha ao carregar cliente.'),
+        message: getErrorMessage(err, t('clients.error.loadDetail')),
         severity: 'error'
       });
     } finally {
@@ -185,23 +187,23 @@ const AdminClients = () => {
     const digits = clientForm.cpfCnpj.replace(/\D/g, '');
     const type = clientForm.type as ClientType;
     if (!type) {
-      setToast({ message: 'Informe o tipo de cliente.', severity: 'error' });
+      setToast({ message: t('clients.toast.typeRequired'), severity: 'error' });
       return;
     }
     if (!trimmedName) {
-      setToast({ message: 'Informe o nome do cliente.', severity: 'error' });
+      setToast({ message: t('clients.toast.nameRequired'), severity: 'error' });
       return;
     }
     if (!digits) {
-      setToast({ message: 'CPF/CNPJ é obrigatório.', severity: 'error' });
+      setToast({ message: t('clients.toast.documentRequired'), severity: 'error' });
       return;
     }
     if (type === 'PF' && digits.length !== 11) {
-      setToast({ message: 'CPF inválido.', severity: 'error' });
+      setToast({ message: t('clients.toast.cpfInvalid'), severity: 'error' });
       return;
     }
     if (type === 'PJ' && digits.length !== 14) {
-      setToast({ message: 'CNPJ inválido.', severity: 'error' });
+      setToast({ message: t('clients.toast.cnpjInvalid'), severity: 'error' });
       return;
     }
     const payload = {
@@ -215,16 +217,16 @@ const AdminClients = () => {
     try {
       if (formMode === 'create') {
         await clientsCreate(sessionId, payload);
-        setToast({ message: 'Cliente criado.', severity: 'success' });
+        setToast({ message: t('clients.toast.created'), severity: 'success' });
       } else if (clientForm.id) {
         await clientsUpdate(sessionId, clientForm.id, payload);
-        setToast({ message: 'Cliente atualizado.', severity: 'success' });
+        setToast({ message: t('clients.toast.updated'), severity: 'success' });
       }
       setIsFormOpen(false);
       await loadClients();
     } catch (err) {
       setToast({
-        message: getErrorMessage(err, 'Falha ao salvar cliente.'),
+        message: getErrorMessage(err, t('clients.toast.saveError')),
         severity: 'error'
       });
     }
@@ -234,12 +236,12 @@ const AdminClients = () => {
     if (!sessionId || !archiveTarget) return;
     try {
       await clientsArchive(sessionId, archiveTarget.id);
-      setToast({ message: 'Cliente arquivado.', severity: 'success' });
+      setToast({ message: t('clients.toast.archived'), severity: 'success' });
       setArchiveTarget(null);
       await loadClients();
     } catch (err) {
       setToast({
-        message: getErrorMessage(err, 'Falha ao arquivar cliente.'),
+        message: getErrorMessage(err, t('clients.toast.archiveError')),
         severity: 'error'
       });
     }
@@ -256,30 +258,30 @@ const AdminClients = () => {
       <Stack spacing={2}>
         <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} alignItems="center">
           <Typography variant="h4" sx={{ flexGrow: 1 }}>
-            Clientes
+            {t('clients.title')}
           </Typography>
           <Button variant="contained" onClick={openCreateForm}>
-            Novo cliente
+            {t('clients.new')}
           </Button>
         </Stack>
 
         <Stack direction={{ xs: 'column', md: 'row' }} spacing={2}>
           <TextField
-            label="Busca"
+            label={t('common.search')}
             value={filters.q}
             onChange={(event) => setFilters((prev) => ({ ...prev, q: event.target.value }))}
             fullWidth
           />
           <FormControl fullWidth>
-            <InputLabel>Tipo</InputLabel>
+            <InputLabel>{t('common.type')}</InputLabel>
             <Select
-              label="Tipo"
+              label={t('common.type')}
               value={filters.type}
               onChange={(event) =>
                 setFilters((prev) => ({ ...prev, type: event.target.value }))
               }
             >
-              <MenuItem value="">Todos</MenuItem>
+              <MenuItem value="">{t('common.all')}</MenuItem>
               {typeOptions.map((type) => (
                 <MenuItem key={type} value={type}>
                   {getClientTypeLabel(type)}
@@ -288,15 +290,15 @@ const AdminClients = () => {
             </Select>
           </FormControl>
           <FormControl fullWidth>
-            <InputLabel>Status</InputLabel>
+            <InputLabel>{t('common.status')}</InputLabel>
             <Select
-              label="Status"
+              label={t('common.status')}
               value={filters.status}
               onChange={(event) =>
                 setFilters((prev) => ({ ...prev, status: event.target.value }))
               }
             >
-              <MenuItem value="">Todos</MenuItem>
+              <MenuItem value="">{t('common.all')}</MenuItem>
               {statusOptions.map((status) => (
                 <MenuItem key={status} value={status}>
                   {getStatusLabel(status)}
@@ -311,11 +313,11 @@ const AdminClients = () => {
         <Table size="small">
           <TableHead>
             <TableRow>
-              <TableCell>Nome / Razão social</TableCell>
-              <TableCell>CPF/CNPJ</TableCell>
-              <TableCell>Tipo</TableCell>
-              <TableCell>Status</TableCell>
-              <TableCell align="right">Ações</TableCell>
+              <TableCell>{t('clients.table.name')}</TableCell>
+              <TableCell>{t('clients.table.document')}</TableCell>
+              <TableCell>{t('clients.table.type')}</TableCell>
+              <TableCell>{t('clients.table.status')}</TableCell>
+              <TableCell align="right">{t('common.actions')}</TableCell>
             </TableRow>
           </TableHead>
           <TableBody>
@@ -333,10 +335,10 @@ const AdminClients = () => {
                       component={Link}
                       to={`/clients/${client.id}`}
                     >
-                      Atendimentos
+                      {t('clients.button.attendances')}
                     </Button>
                     <Button size="small" variant="outlined" onClick={() => openEditForm(client)}>
-                      Editar
+                      {t('common.edit')}
                     </Button>
                     <Button
                       size="small"
@@ -345,7 +347,7 @@ const AdminClients = () => {
                       disabled={client.status === 'ARCHIVED'}
                       onClick={() => setArchiveTarget(client)}
                     >
-                      Arquivar
+                      {t('clients.button.archive')}
                     </Button>
                   </Stack>
                 </TableCell>
@@ -354,7 +356,7 @@ const AdminClients = () => {
             {!isLoading && clients.length === 0 && (
               <TableRow>
                 <TableCell colSpan={5} align="center">
-                  Nenhum cliente encontrado.
+                  {t('clients.empty')}
                 </TableCell>
               </TableRow>
             )}
@@ -363,13 +365,15 @@ const AdminClients = () => {
       </Stack>
 
       <Dialog open={isFormOpen} onClose={() => setIsFormOpen(false)} fullWidth maxWidth="sm">
-        <DialogTitle>{formMode === 'create' ? 'Novo cliente' : 'Editar cliente'}</DialogTitle>
+        <DialogTitle>
+          {formMode === 'create' ? t('clients.dialog.new') : t('clients.dialog.edit')}
+        </DialogTitle>
         <DialogContent>
           <Stack spacing={2} mt={1}>
             <FormControl fullWidth>
-              <InputLabel>Tipo</InputLabel>
+              <InputLabel>{t('common.type')}</InputLabel>
               <Select
-                label="Tipo"
+                label={t('common.type')}
                 value={clientForm.type}
                 onChange={(event) =>
                   setClientForm((prev) => ({
@@ -386,7 +390,7 @@ const AdminClients = () => {
               </Select>
             </FormControl>
             <TextField
-              label="Nome"
+              label={t('common.name')}
               value={clientForm.name}
               onChange={(event) =>
                 setClientForm((prev) => ({ ...prev, name: event.target.value }))
@@ -394,13 +398,13 @@ const AdminClients = () => {
               fullWidth
             />
             <TextField
-              label="CPF/CNPJ"
+              label={t('clients.form.document')}
               value={formatCpfCnpj(clientForm.cpfCnpj)}
               onChange={(event) => handleCpfCnpjChange(event.target.value)}
               fullWidth
             />
             <TextField
-              label="Email"
+              label={t('common.email')}
               type="email"
               value={clientForm.email}
               onChange={(event) =>
@@ -409,7 +413,7 @@ const AdminClients = () => {
               fullWidth
             />
             <TextField
-              label="Telefone"
+              label={t('common.phone')}
               value={clientForm.phone}
               onChange={(event) =>
                 setClientForm((prev) => ({ ...prev, phone: event.target.value }))
@@ -417,7 +421,7 @@ const AdminClients = () => {
               fullWidth
             />
             <TextField
-              label="Observações"
+              label={t('clients.form.notes')}
               value={clientForm.notes}
               onChange={(event) =>
                 setClientForm((prev) => ({ ...prev, notes: event.target.value }))
@@ -429,24 +433,24 @@ const AdminClients = () => {
           </Stack>
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setIsFormOpen(false)}>Cancelar</Button>
+          <Button onClick={() => setIsFormOpen(false)}>{t('common.cancel')}</Button>
           <Button variant="contained" onClick={handleSubmit}>
-            Salvar
+            {t('common.save')}
           </Button>
         </DialogActions>
       </Dialog>
 
       <Dialog open={!!archiveTarget} onClose={() => setArchiveTarget(null)} fullWidth maxWidth="xs">
-        <DialogTitle>Arquivar cliente</DialogTitle>
+        <DialogTitle>{t('clients.dialog.archiveTitle')}</DialogTitle>
         <DialogContent>
           <Typography>
-            Tem certeza que deseja arquivar este cliente? Ele continuará disponível no histórico.
+            {t('clients.dialog.archiveConfirm')}
           </Typography>
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setArchiveTarget(null)}>Cancelar</Button>
+          <Button onClick={() => setArchiveTarget(null)}>{t('common.cancel')}</Button>
           <Button variant="contained" color="warning" onClick={handleArchive}>
-            Arquivar
+            {t('clients.button.archive')}
           </Button>
         </DialogActions>
       </Dialog>

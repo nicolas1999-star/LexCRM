@@ -34,9 +34,16 @@ import {
 import { authReauthCheck } from '../api/auth';
 import { getErrorMessage } from '../api/errors';
 import { getRoleLabel } from '../constants/roles';
+import { t } from '../i18n';
 
 const roleOptions = Object.values(Role);
 const statusOptions: UserStatus[] = ['ACTIVE', 'INACTIVE', 'SUSPENDED'];
+
+const statusLabels: Record<UserStatus, string> = {
+  ACTIVE: t('status.active'),
+  INACTIVE: t('status.inactive'),
+  SUSPENDED: t('status.suspended')
+};
 
 type ToastState = {
   message: string;
@@ -110,7 +117,7 @@ const AdminUsers = () => {
       });
       setUsers(data);
     } catch (err) {
-      setError(getErrorMessage(err, 'Falha ao carregar usuários.'));
+      setError(getErrorMessage(err, t('users.error.load')));
     } finally {
       setIsLoading(false);
     }
@@ -151,23 +158,23 @@ const AdminUsers = () => {
     const trimmedName = userForm.name.trim();
     const trimmedEmail = userForm.email.trim();
     if (!trimmedName) {
-      setToast({ message: 'Informe o nome do usuário.', severity: 'error' });
+      setToast({ message: t('users.toast.nameRequired'), severity: 'error' });
       return;
     }
     if (!EMAIL_REGEX.test(trimmedEmail)) {
-      setToast({ message: 'Informe um email válido.', severity: 'error' });
+      setToast({ message: t('users.toast.emailInvalid'), severity: 'error' });
       return;
     }
     let password = '';
     if (formMode === 'create') {
       password = userForm.passwordInitial?.trim() ?? '';
       if (!password) {
-        setToast({ message: 'Informe a senha inicial.', severity: 'error' });
+        setToast({ message: t('users.toast.initialPasswordRequired'), severity: 'error' });
         return;
       }
       if (password.length < 8) {
         setToast({
-          message: 'A senha inicial deve ter no mínimo 8 caracteres.',
+          message: t('users.toast.initialPasswordLength'),
           severity: 'error'
         });
         return;
@@ -181,20 +188,20 @@ const AdminUsers = () => {
           role: userForm.role,
           passwordInitial: password
         });
-        setToast({ message: 'Usuário criado com sucesso.', severity: 'success' });
+        setToast({ message: t('users.toast.created'), severity: 'success' });
       } else if (userForm.id) {
         await usersUpdate(sessionId, userForm.id, {
           name: trimmedName,
           email: trimmedEmail,
           role: userForm.role
         });
-        setToast({ message: 'Usuário atualizado com sucesso.', severity: 'success' });
+        setToast({ message: t('users.toast.updated'), severity: 'success' });
       }
       setIsFormOpen(false);
       await loadUsers();
     } catch (err) {
       setToast({
-        message: getErrorMessage(err, 'Falha ao salvar usuário.'),
+        message: getErrorMessage(err, t('users.toast.saveError')),
         severity: 'error'
       });
     }
@@ -205,11 +212,11 @@ const AdminUsers = () => {
     const nextStatus: UserStatus = user.status === 'ACTIVE' ? 'INACTIVE' : 'ACTIVE';
     try {
       await usersSetStatus(sessionId, user.id, nextStatus);
-      setToast({ message: 'Status atualizado.', severity: 'success' });
+      setToast({ message: t('users.toast.statusUpdated'), severity: 'success' });
       await loadUsers();
     } catch (err) {
       setToast({
-        message: getErrorMessage(err, 'Falha ao alterar status.'),
+        message: getErrorMessage(err, t('users.toast.statusError')),
         severity: 'error'
       });
     }
@@ -224,11 +231,11 @@ const AdminUsers = () => {
     try {
       await authReauthCheck(sessionId, resetForm.currentPassword);
       await usersResetPassword(sessionId, resetForm.userId, resetForm.newPassword);
-      setToast({ message: 'Senha redefinida.', severity: 'success' });
+      setToast({ message: t('users.toast.passwordReset'), severity: 'success' });
       setResetForm(null);
     } catch (err) {
       setToast({
-        message: getErrorMessage(err, 'Falha ao redefinir senha.'),
+        message: getErrorMessage(err, t('users.toast.passwordResetError')),
         severity: 'error'
       });
     }
@@ -239,30 +246,30 @@ const AdminUsers = () => {
       <Stack spacing={2}>
         <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} alignItems="center">
           <Typography variant="h4" sx={{ flexGrow: 1 }}>
-            Usuários
+            {t('users.title')}
           </Typography>
           <Button variant="contained" onClick={openCreateForm}>
-            Novo usuário
+            {t('users.new')}
           </Button>
         </Stack>
 
         <Stack direction={{ xs: 'column', md: 'row' }} spacing={2}>
           <TextField
-            label="Busca"
+            label={t('common.search')}
             value={filters.q}
             onChange={(event) => setFilters((prev) => ({ ...prev, q: event.target.value }))}
             fullWidth
           />
           <FormControl fullWidth>
-            <InputLabel>Papel</InputLabel>
+            <InputLabel>{t('common.role')}</InputLabel>
             <Select
               value={filters.role}
-              label="Papel"
+              label={t('common.role')}
               onChange={(event) =>
                 setFilters((prev) => ({ ...prev, role: event.target.value }))
               }
             >
-              <MenuItem value="">Todas</MenuItem>
+              <MenuItem value="">{t('common.all')}</MenuItem>
               {roleOptions.map((role) => (
                 <MenuItem key={role} value={role}>
                   {getRoleLabel(role)}
@@ -271,18 +278,18 @@ const AdminUsers = () => {
             </Select>
           </FormControl>
           <FormControl fullWidth>
-            <InputLabel>Status</InputLabel>
+            <InputLabel>{t('common.status')}</InputLabel>
             <Select
               value={filters.status}
-              label="Status"
+              label={t('common.status')}
               onChange={(event) =>
                 setFilters((prev) => ({ ...prev, status: event.target.value }))
               }
             >
-              <MenuItem value="">Todos</MenuItem>
+              <MenuItem value="">{t('common.all')}</MenuItem>
               {statusOptions.map((status) => (
                 <MenuItem key={status} value={status}>
-                  {status}
+                  {statusLabels[status]}
                 </MenuItem>
               ))}
             </Select>
@@ -294,11 +301,11 @@ const AdminUsers = () => {
         <Table size="small">
           <TableHead>
             <TableRow>
-              <TableCell>Nome</TableCell>
-              <TableCell>Email</TableCell>
-              <TableCell>Papel</TableCell>
-              <TableCell>Status</TableCell>
-              <TableCell align="right">Ações</TableCell>
+              <TableCell>{t('users.table.name')}</TableCell>
+              <TableCell>{t('users.table.email')}</TableCell>
+              <TableCell>{t('users.table.role')}</TableCell>
+              <TableCell>{t('users.table.status')}</TableCell>
+              <TableCell align="right">{t('common.actions')}</TableCell>
             </TableRow>
           </TableHead>
           <TableBody>
@@ -307,11 +314,11 @@ const AdminUsers = () => {
                 <TableCell>{user.name}</TableCell>
                 <TableCell>{user.email}</TableCell>
                 <TableCell>{getRoleLabel(user.role)}</TableCell>
-                <TableCell>{user.status}</TableCell>
+                <TableCell>{statusLabels[user.status]}</TableCell>
                 <TableCell align="right">
                   <Stack direction="row" spacing={1} justifyContent="flex-end">
                     <Button size="small" variant="outlined" onClick={() => openEditForm(user)}>
-                      Editar
+                      {t('common.edit')}
                     </Button>
                     <Button
                       size="small"
@@ -319,7 +326,9 @@ const AdminUsers = () => {
                       color={user.status === 'ACTIVE' ? 'warning' : 'success'}
                       onClick={() => handleToggleStatus(user)}
                     >
-                      {user.status === 'ACTIVE' ? 'Inativar' : 'Ativar'}
+                      {user.status === 'ACTIVE'
+                        ? t('users.button.deactivate')
+                        : t('users.button.activate')}
                     </Button>
                     <Button
                       size="small"
@@ -327,7 +336,7 @@ const AdminUsers = () => {
                       color="secondary"
                       onClick={() => handleResetPassword(user)}
                     >
-                      Reset senha
+                      {t('users.button.resetPassword')}
                     </Button>
                   </Stack>
                 </TableCell>
@@ -336,7 +345,7 @@ const AdminUsers = () => {
             {!isLoading && users.length === 0 && (
               <TableRow>
                 <TableCell colSpan={5} align="center">
-                  Nenhum usuário encontrado.
+                  {t('users.empty')}
                 </TableCell>
               </TableRow>
             )}
@@ -345,11 +354,13 @@ const AdminUsers = () => {
       </Stack>
 
       <Dialog open={isFormOpen} onClose={() => setIsFormOpen(false)} fullWidth maxWidth="sm">
-        <DialogTitle>{formMode === 'create' ? 'Novo usuário' : 'Editar usuário'}</DialogTitle>
+        <DialogTitle>
+          {formMode === 'create' ? t('users.dialog.new') : t('users.dialog.edit')}
+        </DialogTitle>
         <DialogContent>
           <Stack spacing={2} mt={1}>
             <TextField
-              label="Nome"
+              label={t('common.name')}
               value={userForm.name}
               onChange={(event) =>
                 setUserForm((prev) => ({ ...prev, name: event.target.value }))
@@ -357,7 +368,7 @@ const AdminUsers = () => {
               fullWidth
             />
             <TextField
-              label="Email"
+              label={t('common.email')}
               type="email"
               value={userForm.email}
               onChange={(event) =>
@@ -366,10 +377,10 @@ const AdminUsers = () => {
               fullWidth
             />
             <FormControl fullWidth>
-              <InputLabel>Papel</InputLabel>
+              <InputLabel>{t('common.role')}</InputLabel>
               <Select
                 value={userForm.role}
-                label="Papel"
+                label={t('common.role')}
                 onChange={(event) =>
                   setUserForm((prev) => ({ ...prev, role: event.target.value as Role }))
                 }
@@ -384,7 +395,7 @@ const AdminUsers = () => {
             {formMode === 'create' && (
               <Stack spacing={1}>
                 <TextField
-                  label="Senha inicial"
+                  label={t('users.form.initialPassword')}
                   type="password"
                   value={userForm.passwordInitial}
                   onChange={(event) =>
@@ -404,7 +415,7 @@ const AdminUsers = () => {
                       }))
                     }
                   >
-                    Gerar senha
+                    {t('users.form.generatePassword')}
                   </Button>
                 </Box>
               </Stack>
@@ -412,19 +423,19 @@ const AdminUsers = () => {
           </Stack>
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setIsFormOpen(false)}>Cancelar</Button>
+          <Button onClick={() => setIsFormOpen(false)}>{t('common.cancel')}</Button>
           <Button variant="contained" onClick={handleFormSubmit}>
-            Salvar
+            {t('common.save')}
           </Button>
         </DialogActions>
       </Dialog>
 
       <Dialog open={!!resetForm} onClose={() => setResetForm(null)} fullWidth maxWidth="sm">
-        <DialogTitle>Redefinir senha</DialogTitle>
+        <DialogTitle>{t('users.dialog.resetPassword')}</DialogTitle>
         <DialogContent>
           <Stack spacing={2} mt={1}>
             <TextField
-              label="Sua senha"
+              label={t('users.form.currentPassword')}
               type="password"
               value={resetForm?.currentPassword ?? ''}
               onChange={(event) =>
@@ -435,7 +446,7 @@ const AdminUsers = () => {
               fullWidth
             />
             <TextField
-              label="Nova senha"
+              label={t('users.form.newPassword')}
               type="password"
               value={resetForm?.newPassword ?? ''}
               onChange={(event) =>
@@ -448,9 +459,9 @@ const AdminUsers = () => {
           </Stack>
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setResetForm(null)}>Cancelar</Button>
+          <Button onClick={() => setResetForm(null)}>{t('common.cancel')}</Button>
           <Button variant="contained" onClick={handleConfirmReset}>
-            Confirmar
+            {t('common.confirm')}
           </Button>
         </DialogActions>
       </Dialog>
