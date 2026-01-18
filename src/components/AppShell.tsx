@@ -79,6 +79,9 @@ const AppShell = () => {
           <ListItemButton component={NavLink} to="/app/atendimentos">
             <ListItemText primary={t('app.attendances')} />
           </ListItemButton>
+          <ListItemButton component={NavLink} to="/app/documentos">
+            <ListItemText primary="Documentos" />
+          </ListItemButton>
           {canAccessAdmin && (
             <>
               <ListItemButton component={NavLink} to="/admin/users">
