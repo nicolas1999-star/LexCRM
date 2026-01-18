@@ -56,6 +56,8 @@ type UserFormState = {
   email: string;
   role: Role;
   passwordInitial?: string;
+  oabNumber?: string;
+  oabUf?: string;
 };
 
 type ResetFormState = {
@@ -65,6 +67,7 @@ type ResetFormState = {
 };
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const LAWYER_ROLES = new Set<Role>([Role.LAWYER_OWNER, Role.LAWYER_ASSOC]);
 
 const PASSWORD_CHARSET =
   'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789!@#$%&*?';
@@ -97,7 +100,9 @@ const AdminUsers = () => {
     name: '',
     email: '',
     role: Role.COORDINATOR,
-    passwordInitial: ''
+    passwordInitial: '',
+    oabNumber: '',
+    oabUf: ''
   });
   const [resetForm, setResetForm] = useState<ResetFormState | null>(null);
 
@@ -137,7 +142,9 @@ const AdminUsers = () => {
       name: '',
       email: '',
       role: Role.COORDINATOR,
-      passwordInitial: ''
+      passwordInitial: '',
+      oabNumber: '',
+      oabUf: ''
     });
     setIsFormOpen(true);
   };
@@ -148,7 +155,9 @@ const AdminUsers = () => {
       id: user.id,
       name: user.name,
       email: user.email,
-      role: user.role
+      role: user.role,
+      oabNumber: user.oabNumber ?? '',
+      oabUf: user.oabUf ?? ''
     });
     setIsFormOpen(true);
   };
@@ -163,6 +172,12 @@ const AdminUsers = () => {
     }
     if (!EMAIL_REGEX.test(trimmedEmail)) {
       setToast({ message: t('users.toast.emailInvalid'), severity: 'error' });
+      return;
+    }
+    const trimmedOabNumber = userForm.oabNumber?.trim() ?? '';
+    const trimmedOabUf = userForm.oabUf?.trim().toUpperCase() ?? '';
+    if (LAWYER_ROLES.has(userForm.role) && (!trimmedOabNumber || !trimmedOabUf)) {
+      setToast({ message: t('users.toast.oabRequired'), severity: 'error' });
       return;
     }
     let password = '';
@@ -186,14 +201,18 @@ const AdminUsers = () => {
           name: trimmedName,
           email: trimmedEmail,
           role: userForm.role,
-          passwordInitial: password
+          passwordInitial: password,
+          oabNumber: trimmedOabNumber || undefined,
+          oabUf: trimmedOabUf || undefined
         });
         setToast({ message: t('users.toast.created'), severity: 'success' });
       } else if (userForm.id) {
         await usersUpdate(sessionId, userForm.id, {
           name: trimmedName,
           email: trimmedEmail,
-          role: userForm.role
+          role: userForm.role,
+          oabNumber: trimmedOabNumber || undefined,
+          oabUf: trimmedOabUf || undefined
         });
         setToast({ message: t('users.toast.updated'), severity: 'success' });
       }
@@ -392,6 +411,25 @@ const AdminUsers = () => {
                 ))}
               </Select>
             </FormControl>
+            <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}>
+              <TextField
+                label={t('users.form.oabNumber')}
+                value={userForm.oabNumber ?? ''}
+                onChange={(event) =>
+                  setUserForm((prev) => ({ ...prev, oabNumber: event.target.value }))
+                }
+                fullWidth
+              />
+              <TextField
+                label={t('users.form.oabUf')}
+                value={userForm.oabUf ?? ''}
+                onChange={(event) =>
+                  setUserForm((prev) => ({ ...prev, oabUf: event.target.value.toUpperCase() }))
+                }
+                inputProps={{ maxLength: 2 }}
+                fullWidth
+              />
+            </Stack>
             {formMode === 'create' && (
               <Stack spacing={1}>
                 <TextField

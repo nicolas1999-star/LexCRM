@@ -12,6 +12,8 @@ export type UserSummary = {
   createdAt: string;
   updatedAt: string;
   lastLoginAt?: string | null;
+  oabNumber?: string | null;
+  oabUf?: string | null;
 };
 
 export type UserDetail = UserSummary;
@@ -27,12 +29,16 @@ export type CreateUserPayload = {
   email: string;
   role: Role;
   passwordInitial: string;
+  oabNumber?: string | null;
+  oabUf?: string | null;
 };
 
 export type UpdateUserPayload = {
   name: string;
   email: string;
   role: Role;
+  oabNumber?: string | null;
+  oabUf?: string | null;
 };
 
 export const usersList = async (
@@ -63,7 +69,9 @@ export const usersCreate = async (
       name: payload.name,
       email: payload.email,
       role: payload.role,
-      passwordInitial: payload.passwordInitial
+      passwordInitial: payload.passwordInitial,
+      oabNumber: payload.oabNumber ?? undefined,
+      oabUf: payload.oabUf ?? undefined
     }
   });
 };
@@ -79,7 +87,9 @@ export const usersUpdate = async (
     payload: {
       name: payload.name,
       email: payload.email,
-      role: payload.role
+      role: payload.role,
+      oabNumber: payload.oabNumber ?? undefined,
+      oabUf: payload.oabUf ?? undefined
     }
   });
 };

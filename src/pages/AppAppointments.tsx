@@ -548,7 +548,7 @@ const AppAppointments = () => {
                 fullWidth
               />
               <TextField
-                label="Histórico"
+                label="Histórico dos fatos"
                 value={documentForm.history}
                 onChange={(event) =>
                   setDocumentForm((prev) =>
@@ -560,7 +560,7 @@ const AppAppointments = () => {
                 minRows={3}
               />
               <TextField
-                label="Análise"
+                label="Análise jurídica"
                 value={documentForm.analysis}
                 onChange={(event) =>
                   setDocumentForm((prev) =>
@@ -596,7 +596,7 @@ const AppAppointments = () => {
                 {documentPreview.authoredByOab ? ` (${documentPreview.authoredByOab})` : ''}
               </Typography>
               <Stack direction="row" spacing={1} alignItems="center">
-                <Typography variant="body2">Hash do documento:</Typography>
+                <Typography variant="body2">Hash SHA-256 do conteúdo final:</Typography>
                 <Typography variant="body2" sx={{ fontFamily: 'monospace' }}>
                   {documentPreview.documentHash}
                 </Typography>
