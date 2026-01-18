@@ -1761,18 +1761,29 @@ fn clients_list(
 
   let mut stmt = conn.prepare(&sql)?;
   let rows = stmt.query_map(params_from_iter(params.iter()), |row| {
-    let client_type: String = row.get(1)?;
-    let status: String = row.get(4)?;
-    Ok(ClientSummary {
-      id: row.get(0)?,
-      r#type: parse_client_type(client_type.trim())?,
-      name: row.get(2)?,
-      cpf_cnpj: row.get(3)?,
-      status: parse_client_status(status.trim())?,
-      created_at: row.get(5)?,
-      updated_at: row.get(6)?,
-    })
-  })?;
+  let client_type: String = row.get(1)?;
+  let status: String = row.get(4)?;
+
+  let parsed_type = match parse_client_type(client_type.trim()) {
+    Ok(v) => v,
+    Err(_e) => return Err(rusqlite::Error::InvalidQuery),
+  };
+
+  let parsed_status = match parse_client_status(status.trim()) {
+    Ok(v) => v,
+    Err(_e) => return Err(rusqlite::Error::InvalidQuery),
+  };
+
+  Ok(ClientSummary {
+    id: row.get(0)?,
+    r#type: parsed_type,
+    name: row.get(2)?,
+    cpf_cnpj: row.get(3)?,
+    status: parsed_status,
+    created_at: row.get(5)?,
+    updated_at: row.get(6)?,
+  })
+})?;
 
   let mut clients = Vec::new();
   for row in rows {
@@ -1798,15 +1809,27 @@ fn clients_get(
     "SELECT id, type, name, cpf_cnpj, status, email, phone, notes, created_at, updated_at
      FROM CLIENTS WHERE id = ?1",
   )?;
-  let client = stmt.query_row(params![id], |row| {
+
+  let client_result: rusqlite::Result<ClientDetail> = stmt.query_row(params![id], |row| {
     let client_type: String = row.get(1)?;
     let status: String = row.get(4)?;
+
+    let parsed_type = match parse_client_type(client_type.trim()) {
+      Ok(v) => v,
+      Err(_e) => return Err(rusqlite::Error::InvalidQuery),
+    };
+
+    let parsed_status = match parse_client_status(status.trim()) {
+      Ok(v) => v,
+      Err(_e) => return Err(rusqlite::Error::InvalidQuery),
+    };
+
     Ok(ClientDetail {
       id: row.get(0)?,
-      r#type: parse_client_type(client_type.trim())?,
+      r#type: parsed_type,
       name: row.get(2)?,
       cpf_cnpj: row.get(3)?,
-      status: parse_client_status(status.trim())?,
+      status: parsed_status,
       email: row.get(5)?,
       phone: row.get(6)?,
       notes: row.get(7)?,
@@ -1815,14 +1838,15 @@ fn clients_get(
     })
   });
 
-  match client {
+  match client_result {
     Ok(client) => Ok(client),
     Err(rusqlite::Error::QueryReturnedNoRows) => {
-      Err(AppError::new("client_not_found", "Cliente não encontrado."))
+      Err(AppError::new("not_found", "Cliente não encontrado."))
     }
     Err(err) => Err(err.into()),
   }
 }
+
 
 #[tauri::command]
 fn clients_create(
