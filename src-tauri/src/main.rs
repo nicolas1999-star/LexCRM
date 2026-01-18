@@ -441,10 +441,159 @@ fn normalize_optional_field(value: Option<String>) -> Option<String> {
   })
 }
 
+const DEFAULT_SIGNATURE_NAME: &str = "Jorge Nicolas Paiva de Sousa";
+const DEFAULT_SIGNATURE_OAB: &str = "OAB/SP 490052";
+
+fn html_escape(input: &str) -> String {
+  let mut escaped = String::with_capacity(input.len());
+  for ch in input.chars() {
+    match ch {
+      '&' => escaped.push_str("&amp;"),
+      '<' => escaped.push_str("&lt;"),
+      '>' => escaped.push_str("&gt;"),
+      '"' => escaped.push_str("&quot;"),
+      '\'' => escaped.push_str("&#39;"),
+      _ => escaped.push(ch),
+    }
+  }
+  escaped
+}
+
 fn sha256_hex(data: &[u8]) -> String {
   let mut hasher = Sha256::new();
   hasher.update(data);
   hex::encode(hasher.finalize())
+}
+
+fn build_section_paragraphs(content: &str) -> String {
+  let escaped = html_escape(content);
+  let mut paragraphs = Vec::new();
+  let mut current = String::new();
+  for line in escaped.lines() {
+    if line.trim().is_empty() {
+      if !current.trim().is_empty() {
+        paragraphs.push(current.trim_end().to_string());
+        current.clear();
+      }
+    } else {
+      if !current.is_empty() {
+        current.push_str("<br />");
+      }
+      current.push_str(line);
+    }
+  }
+  if !current.trim().is_empty() {
+    paragraphs.push(current.trim_end().to_string());
+  }
+  if paragraphs.is_empty() {
+    return "<p></p>".to_string();
+  }
+  paragraphs
+    .into_iter()
+    .map(|paragraph| format!("<p>{}</p>", paragraph))
+    .collect::<Vec<_>>()
+    .join("\n")
+}
+
+fn resolve_signature_identity(
+  user_name: String,
+  oab_number: Option<String>,
+  oab_uf: Option<String>,
+) -> (String, String) {
+  let resolved_name = if user_name.trim().is_empty() {
+    DEFAULT_SIGNATURE_NAME.to_string()
+  } else {
+    user_name
+  };
+  let oab_number = normalize_optional_field(oab_number);
+  let oab_uf = normalize_optional_field(oab_uf);
+  let resolved_oab = match (oab_number, oab_uf) {
+    (Some(number), Some(uf)) => format!("OAB/{} {}", uf, number),
+    _ => DEFAULT_SIGNATURE_OAB.to_string(),
+  };
+  (resolved_name, resolved_oab)
+}
+
+fn build_abnt_html(payload: &DocumentGeneratePayload) -> String {
+  let title = html_escape(&payload.title);
+  let office_name = html_escape(&payload.office_name);
+  let client_name = html_escape(&payload.client_name);
+  let client_document = html_escape(&payload.client_document);
+  let generated_at = html_escape(&payload.generated_at);
+  let attendance_date = html_escape(&payload.attendance_date);
+  let client_email = payload
+    .client_email
+    .as_deref()
+    .map(html_escape)
+    .unwrap_or_default();
+  let client_phone = payload
+    .client_phone
+    .as_deref()
+    .map(html_escape)
+    .unwrap_or_default();
+  let history = build_section_paragraphs(&payload.history);
+  let analysis = build_section_paragraphs(&payload.analysis);
+  let conclusion = build_section_paragraphs(&payload.conclusion);
+  let client_contact = match (client_email.is_empty(), client_phone.is_empty()) {
+    (true, true) => String::new(),
+    (false, true) => format!("<p class=\"meta-line\">E-mail: {}</p>", client_email),
+    (true, false) => format!("<p class=\"meta-line\">Telefone: {}</p>", client_phone),
+    (false, false) => format!(
+      "<p class=\"meta-line\">E-mail: {} · Telefone: {}</p>",
+      client_email, client_phone
+    ),
+  };
+
+  format!(
+    "<!doctype html>
+<html lang=\"pt-BR\">
+<head>
+  <meta charset=\"utf-8\" />
+  <title>{}</title>
+  <style>
+    @page {{ size: A4; margin: 3cm 2cm 2cm 3cm; }}
+    body {{ font-family: \"Times New Roman\", Times, serif; font-size: 12pt; line-height: 1.5; text-align: justify; }}
+    p {{ text-indent: 1.25cm; margin: 0 0 12pt 0; }}
+    h1 {{ text-align: center; font-size: 14pt; font-weight: bold; text-transform: uppercase; margin: 0 0 24pt 0; }}
+    h2 {{ font-size: 12pt; font-weight: bold; text-transform: uppercase; margin: 24pt 0 12pt 0; }}
+    .signature {{ margin-top: 48pt; text-align: center; }}
+    .signature p {{ text-indent: 0; margin: 0; }}
+    .hash {{ font-size: 9pt; margin-top: 18pt; word-break: break-word; text-align: left; }}
+    .hash p {{ text-indent: 0; margin: 0 0 6pt 0; }}
+    .meta {{ font-size: 10pt; margin-top: 12pt; text-align: left; }}
+    .meta p {{ text-indent: 0; margin: 0 0 6pt 0; }}
+    hr {{ border: 0; border-top: 1px solid #000; margin: 24pt 0; }}
+  </style>
+</head>
+<body>
+  <h1>{}</h1>
+  <div class=\"meta\">
+    <p class=\"meta-line\">Escritório: {}</p>
+    <p class=\"meta-line\">Cliente: {} ({})</p>
+    {}
+    <p class=\"meta-line\">Data do atendimento: {}</p>
+    <p class=\"meta-line\">Documento gerado em: {}</p>
+  </div>
+  <h2>1 HISTÓRICO DOS FATOS</h2>
+  {}
+  <h2>2 ANÁLISE JURÍDICA</h2>
+  {}
+  <h2>3 CONCLUSÃO</h2>
+  {}
+</body>
+</html>",
+    title,
+    title,
+    office_name,
+    client_name,
+    client_document,
+    client_contact,
+    attendance_date,
+    generated_at,
+    history,
+    analysis,
+    conclusion
+  )
 }
 
 fn build_signature_block(
@@ -454,24 +603,38 @@ fn build_signature_block(
   created_at: &str,
   document_hash: Option<&str>,
 ) -> String {
-  let hash_block = document_hash
-    .map(|hash| {
-      format!(
-        "<h3>Hash SHA-256 do conteúdo final</h3>
-  <p class=\"document-hash\">{}</p>",
-        hash
-      )
-    })
-    .unwrap_or_default();
+  let hash_block = document_hash.map(|hash| {
+    format!(
+      "<div class=\"hash\">
+  <p>Hash SHA-256 do conteúdo final:</p>
+  <p>{}</p>
+</div>",
+      html_escape(hash)
+    )
+  });
+  let resolved_name = html_escape(authored_by_user_name);
+  let resolved_oab = html_escape(authored_by_oab);
+  let resolved_office = html_escape(office_name);
+  let resolved_date = html_escape(created_at);
   format!(
-    "<section class=\"document-signature\">
-  <h2>Assinatura do advogado</h2>
+    "<section class=\"signature\">
+  <hr />
+  <p>{}</p>
+  <p>{}</p>
+</section>
+<div class=\"meta\">
   <p>Assinado digitalmente por: {} ({})</p>
   <p>Escritório: {}</p>
   <p>Data: {}</p>
-  {}
-</section>",
-    authored_by_user_name, authored_by_oab, office_name, created_at, hash_block
+</div>
+{}",
+    resolved_name,
+    resolved_oab,
+    resolved_name,
+    resolved_oab,
+    resolved_office,
+    resolved_date,
+    hash_block.unwrap_or_default()
   )
 }
 
@@ -722,7 +885,7 @@ fn require_active_session(conn: &Connection, session_id: &str) -> AppResult<Sess
 fn fetch_user_signature_info(
   conn: &Connection,
   user_id: &str,
-) -> AppResult<(String, String, String)> {
+) -> AppResult<(String, Option<String>, Option<String>)> {
   let mut stmt = conn.prepare(
     "SELECT name, oab_number, oab_uf FROM USERS WHERE id = ?1",
   )?;
@@ -740,15 +903,7 @@ fn fetch_user_signature_info(
     }
     Err(err) => return Err(err.into()),
   };
-  let oab_number = normalize_optional_field(oab_number);
-  let oab_uf = normalize_optional_field(oab_uf);
-  match (oab_number, oab_uf) {
-    (Some(number), Some(uf)) => Ok((name, number, uf)),
-    _ => Err(AppError::new(
-      "missing_oab",
-      "Informe a OAB (número e UF) para assinar documentos.",
-    )),
-  }
+  Ok((name, oab_number, oab_uf))
 }
 
 fn require_admin_session(conn: &Connection, session_id: &str) -> AppResult<UserInfo> {
@@ -2224,56 +2379,17 @@ fn documents_generate_html(
   run_migrations(&conn)?;
   let user = require_active_session(&conn, &session_id)?;
   let (user_name, oab_number, oab_uf) = fetch_user_signature_info(&conn, &user.user_id)?;
+  let (signature_name, signature_oab) = resolve_signature_identity(user_name, oab_number, oab_uf);
   let created_at = now_iso();
   let document_id = Uuid::new_v4().to_string();
   let signature_id = Uuid::new_v4().to_string();
-  let authored_by_oab = format!("OAB/{} {}", oab_uf, oab_number);
 
-  let html_base = format!(
-    "<!doctype html>
-<html lang=\"pt-BR\">
-<head>
-  <meta charset=\"utf-8\" />
-  <title>{}</title>
-  <style>
-    body {{ font-family: Arial, sans-serif; margin: 40px; color: #111; }}
-    h1 {{ font-size: 22px; margin-bottom: 4px; }}
-    h2 {{ font-size: 16px; margin-top: 24px; }}
-    h3 {{ font-size: 14px; margin-top: 16px; }}
-    .meta {{ color: #555; font-size: 12px; }}
-    .section {{ margin-top: 16px; white-space: pre-wrap; }}
-    .document-signature {{ margin-top: 32px; padding-top: 16px; border-top: 1px solid #ddd; }}
-    .document-hash {{ font-family: monospace; }}
-  </style>
-</head>
-<body>
-  <h1>{}</h1>
-  <div class=\"meta\">{}</div>
-  <div class=\"meta\">Cliente: {} ({})</div>
-  <div class=\"meta\">Data do atendimento: {}</div>
-  <h2>Histórico dos fatos</h2>
-  <div class=\"section\">{}</div>
-  <h2>Análise jurídica</h2>
-  <div class=\"section\">{}</div>
-  <h2>Conclusão</h2>
-  <div class=\"section\">{}</div>
-</body>
-</html>",
-    payload.title,
-    payload.title,
-    payload.generated_at,
-    payload.client_name,
-    payload.client_document,
-    payload.attendance_date,
-    payload.history,
-    payload.analysis,
-    payload.conclusion
-  );
+  let html_base = build_abnt_html(&payload);
 
   let document_type = payload.document_type.as_str();
   let signature_block_for_hash = build_signature_block(
-    &user_name,
-    &authored_by_oab,
+    &signature_name,
+    &signature_oab,
     &payload.office_name,
     &created_at,
     None,
@@ -2283,8 +2399,8 @@ fn documents_generate_html(
   let document_hash = sha256_hex(normalized_html.as_bytes());
   let content_hash = sha256_hex(normalize_html_for_hash(&html_base).as_bytes());
   let signature_block = build_signature_block(
-    &user_name,
-    &authored_by_oab,
+    &signature_name,
+    &signature_oab,
     &payload.office_name,
     &created_at,
     Some(&document_hash),
@@ -2303,8 +2419,8 @@ fn documents_generate_html(
       payload.client_id,
       payload.office_name,
       user.user_id,
-      user_name,
-      authored_by_oab,
+      signature_name,
+      signature_oab,
       created_at,
       content_hash,
       document_hash,
@@ -2335,8 +2451,8 @@ fn documents_generate_html(
     document_hash,
     content_hash,
     created_at,
-    authored_by_name: user_name,
-    authored_by_oab: Some(authored_by_oab),
+    authored_by_name: signature_name,
+    authored_by_oab: Some(signature_oab),
   })
 }
 

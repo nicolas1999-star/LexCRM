@@ -505,6 +505,9 @@ const AppAppointments = () => {
       >
         <DialogTitle>Gerar documento</DialogTitle>
         <DialogContent>
+          <Typography variant="subtitle2" color="text.secondary" gutterBottom>
+            Formato: ABNT (A4)
+          </Typography>
           {documentForm && (
             <Stack spacing={2} mt={1}>
               <FormControl fullWidth>
