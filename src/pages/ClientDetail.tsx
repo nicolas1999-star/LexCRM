@@ -167,6 +167,7 @@ const ClientDetailPage = () => {
       const detail = await clientsGet(sessionId, id);
       setClient(detail);
     } catch (err) {
+      console.error('Failed to load client detail', err);
       setClientError(getErrorMessage(err, t('clientDetail.error.loadClient')));
     } finally {
       setIsClientLoading(false);
@@ -181,6 +182,7 @@ const ClientDetailPage = () => {
       const data = await attendancesList(sessionId, id);
       setAttendances(data);
     } catch (err) {
+      console.error('Failed to load attendances', err);
       setAttendanceError(getErrorMessage(err, t('clientDetail.error.loadAttendances')));
     } finally {
       setIsAttendanceLoading(false);
@@ -255,6 +257,7 @@ const ClientDetailPage = () => {
       setIsFormOpen(false);
       await loadAttendances();
     } catch (err) {
+      console.error('Failed to save attendance', err);
       setToast({
         message: getErrorMessage(err, t('clientDetail.toast.saveError')),
         severity: 'error'
@@ -270,6 +273,7 @@ const ClientDetailPage = () => {
       setDeleteTarget(null);
       await loadAttendances();
     } catch (err) {
+      console.error('Failed to delete attendance', err);
       setToast({
         message: getErrorMessage(err, t('clientDetail.toast.removeError')),
         severity: 'error'
