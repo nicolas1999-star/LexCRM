@@ -7,6 +7,7 @@ import AdminUsers from './pages/AdminUsers';
 import AdminTeams from './pages/AdminTeams';
 import AdminClients from './pages/AdminClients';
 import AppAppointments from './pages/AppAppointments';
+import AppDocuments from './pages/AppDocuments';
 import ClientDetailPage from './pages/ClientDetail';
 
 const ADMIN_ROLES = new Set<Role>([Role.ADMIN, Role.PARTNER]);
@@ -33,6 +34,7 @@ const AppRoutes = () => {
         <Route index element={<Navigate to="/app/home" replace />} />
         <Route path="home" element={<AppHome />} />
         <Route path="atendimentos" element={<AppAppointments />} />
+        <Route path="documentos" element={<AppDocuments />} />
       </Route>
       <Route
         path="/admin"

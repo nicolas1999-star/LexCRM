@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useState } from 'react';
-import { save } from '@tauri-apps/api/dialog';
 import {
   Alert,
   Box,
@@ -30,8 +29,12 @@ import type {
   AttendanceSummary
 } from '../api/attendances';
 import { clientsList, type ClientSummary } from '../api/clients';
-import { documentsExportHtml, documentsGenerateHtml } from '../api/documents';
-import type { DocumentHtmlResponse, DocumentType } from '../api/documents';
+import {
+  documentsCreateDraft,
+  documentsExportPdf,
+  documentsSign
+} from '../api/documents';
+import type { DocumentStatus, DocumentType } from '../api/documents';
 import { getErrorMessage } from '../api/errors';
 import { t } from '../i18n';
 import { useAuth } from '../state/auth';
@@ -54,10 +57,21 @@ type DocumentFormState = {
   attendanceDate: string;
   documentType: DocumentType;
   officeName: string;
+  lawyerName: string;
+  lawyerOab: string;
   title: string;
   history: string;
   analysis: string;
   conclusion: string;
+};
+
+type DocumentPreviewState = {
+  documentId: string;
+  html: string;
+  status: DocumentStatus;
+  hashHtml?: string | null;
+  hashPdf?: string | null;
+  filePath?: string | null;
 };
 
 const channelOptions: AttendanceChannel[] = [
@@ -98,7 +112,7 @@ const toIsoFromLocal = (value: string) => {
 };
 
 const AppAppointments = () => {
-  const { sessionId } = useAuth();
+  const { sessionId, user } = useAuth();
   const [clients, setClients] = useState<ClientSummary[]>([]);
   const [selectedClientId, setSelectedClientId] = useState('');
   const [attendances, setAttendances] = useState<AttendanceSummary[]>([]);
@@ -118,8 +132,9 @@ const AppAppointments = () => {
   const [deleteTarget, setDeleteTarget] = useState<AttendanceSummary | null>(null);
   const [isDocumentDialogOpen, setIsDocumentDialogOpen] = useState(false);
   const [documentForm, setDocumentForm] = useState<DocumentFormState | null>(null);
-  const [documentPreview, setDocumentPreview] = useState<DocumentHtmlResponse | null>(null);
+  const [documentPreview, setDocumentPreview] = useState<DocumentPreviewState | null>(null);
   const [isDocumentGenerating, setIsDocumentGenerating] = useState(false);
+  const [isDocumentSigning, setIsDocumentSigning] = useState(false);
   const [isDocumentExporting, setIsDocumentExporting] = useState(false);
 
   const canFetch = useMemo(() => !!sessionId, [sessionId]);
@@ -205,11 +220,14 @@ const AppAppointments = () => {
       setToast({ message: 'Selecione um cliente antes de gerar documento.', severity: 'warning' });
       return;
     }
+    const lawyerOab = user?.oabNumber && user?.oabUf ? `${user.oabUf} ${user.oabNumber}` : '';
     setDocumentForm({
       attendanceId: attendance.id,
       attendanceDate: formatDateTime(attendance.occurredAt),
       documentType: 'RELATORIO',
       officeName: '',
+      lawyerName: user?.name ?? '',
+      lawyerOab,
       title: attendance.subject,
       history: attendance.notes,
       analysis: '',
@@ -231,7 +249,7 @@ const AppAppointments = () => {
     }
     setIsDocumentGenerating(true);
     try {
-      const response = await documentsGenerateHtml(sessionId, {
+      const response = await documentsCreateDraft(sessionId, {
         documentType: documentForm.documentType,
         officeName: documentForm.officeName.trim(),
         generatedAt: new Date().toLocaleString('pt-BR'),
@@ -245,8 +263,12 @@ const AppAppointments = () => {
         conclusion: documentForm.conclusion.trim(),
         appointmentId: documentForm.attendanceId
       });
-      setDocumentPreview(response);
-      setToast({ message: 'Documento gerado com assinatura.', severity: 'success' });
+      setDocumentPreview({
+        documentId: response.documentId,
+        html: response.html,
+        status: response.status
+      });
+      setToast({ message: 'Documento gerado em rascunho.', severity: 'success' });
     } catch (err) {
       setToast({ message: getErrorMessage(err, t('appointments.toast.generateError')), severity: 'error' });
     } finally {
@@ -255,30 +277,62 @@ const AppAppointments = () => {
   };
 
   const handleCopyDocumentHash = () => {
-    if (!documentPreview?.documentHash) return;
+    if (!documentPreview?.hashHtml) return;
     if (navigator.clipboard?.writeText) {
-      void navigator.clipboard.writeText(documentPreview.documentHash);
+      void navigator.clipboard.writeText(documentPreview.hashHtml);
       setToast({ message: 'Hash copiado para a área de transferência.', severity: 'success' });
     } else {
       setToast({ message: 'Não foi possível copiar o hash.', severity: 'warning' });
     }
   };
 
-  const handleExportDocument = async () => {
+  const handleSignDocument = async () => {
     if (!sessionId || !documentPreview || !documentForm) return;
+    if (!documentForm.lawyerName.trim() || !documentForm.lawyerOab.trim()) {
+      setToast({ message: 'Informe o advogado responsável e a OAB.', severity: 'error' });
+      return;
+    }
+    setIsDocumentSigning(true);
+    try {
+      const response = await documentsSign(
+        sessionId,
+        documentPreview.documentId,
+        documentForm.lawyerName.trim(),
+        documentForm.lawyerOab.trim()
+      );
+      setDocumentPreview((prev) =>
+        prev
+          ? {
+              ...prev,
+              html: response.htmlSigned,
+              hashHtml: response.hashHtml,
+              status: response.status
+            }
+          : prev
+      );
+      setToast({ message: 'Documento assinado com sucesso.', severity: 'success' });
+    } catch (err) {
+      setToast({ message: 'Falha ao assinar documento.', severity: 'error' });
+    } finally {
+      setIsDocumentSigning(false);
+    }
+  };
+
+  const handleExportDocument = async () => {
+    if (!sessionId || !documentPreview) return;
     setIsDocumentExporting(true);
     try {
-      const filePath = await save({
-        defaultPath: `documento-${documentPreview.documentId}.html`,
-        filters: [{ name: 'HTML', extensions: ['html'] }]
-      });
-      if (!filePath) return;
-      await documentsExportHtml(sessionId, {
-        documentId: documentPreview.documentId,
-        filePath,
-        documentType: documentForm.documentType,
-        appointmentId: documentForm.attendanceId
-      });
+      const response = await documentsExportPdf(sessionId, documentPreview.documentId);
+      setDocumentPreview((prev) =>
+        prev
+          ? {
+              ...prev,
+              hashPdf: response.hashPdf,
+              filePath: response.filePath,
+              status: response.status
+            }
+          : prev
+      );
       setToast({ message: 'Documento exportado com sucesso.', severity: 'success' });
     } catch (err) {
       setToast({ message: 'Falha ao exportar documento.', severity: 'error' });
@@ -541,6 +595,26 @@ const AppAppointments = () => {
                 fullWidth
               />
               <TextField
+                label="Advogado responsável"
+                value={documentForm.lawyerName}
+                onChange={(event) =>
+                  setDocumentForm((prev) =>
+                    prev ? { ...prev, lawyerName: event.target.value } : prev
+                  )
+                }
+                fullWidth
+              />
+              <TextField
+                label="OAB"
+                value={documentForm.lawyerOab}
+                onChange={(event) =>
+                  setDocumentForm((prev) =>
+                    prev ? { ...prev, lawyerOab: event.target.value } : prev
+                  )
+                }
+                fullWidth
+              />
+              <TextField
                 label="Título"
                 value={documentForm.title}
                 onChange={(event) =>
@@ -592,20 +666,32 @@ const AppAppointments = () => {
           {documentPreview && (
             <Box mt={3}>
               <Typography variant="subtitle1" gutterBottom>
-                Documento assinado
+                Documento em visualização
               </Typography>
-              <Typography variant="body2" gutterBottom>
-                Assinado por: {documentPreview.authoredByName}
-                {documentPreview.authoredByOab ? ` (${documentPreview.authoredByOab})` : ''}
-              </Typography>
-              <Stack direction="row" spacing={1} alignItems="center">
-                <Typography variant="body2">Hash SHA-256 do conteúdo final:</Typography>
-                <Typography variant="body2" sx={{ fontFamily: 'monospace' }}>
-                  {documentPreview.documentHash}
-                </Typography>
-                <Button size="small" onClick={handleCopyDocumentHash}>
-                  Copiar
-                </Button>
+              <Stack spacing={1} mb={2}>
+                <Typography variant="body2">Status: {documentPreview.status}</Typography>
+                {documentPreview.hashHtml && (
+                  <Stack direction="row" spacing={1} alignItems="center">
+                    <Typography variant="body2">Hash SHA-256 (HTML):</Typography>
+                    <Typography variant="body2" sx={{ fontFamily: 'monospace' }}>
+                      {documentPreview.hashHtml}
+                    </Typography>
+                    <Button size="small" onClick={handleCopyDocumentHash}>
+                      Copiar
+                    </Button>
+                  </Stack>
+                )}
+                {documentPreview.hashPdf && (
+                  <Stack direction="row" spacing={1} alignItems="center">
+                    <Typography variant="body2">Hash SHA-256 (PDF):</Typography>
+                    <Typography variant="body2" sx={{ fontFamily: 'monospace' }}>
+                      {documentPreview.hashPdf}
+                    </Typography>
+                  </Stack>
+                )}
+                {documentPreview.filePath && (
+                  <Typography variant="body2">Arquivo: {documentPreview.filePath}</Typography>
+                )}
               </Stack>
               <Box mt={2} sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 1 }}>
                 <iframe
@@ -620,12 +706,27 @@ const AppAppointments = () => {
         <DialogActions>
           <Button onClick={() => setIsDocumentDialogOpen(false)}>{t('common.cancel')}</Button>
           <Button variant="outlined" onClick={handleGenerateDocument} disabled={isDocumentGenerating}>
-            {isDocumentGenerating ? 'Gerando...' : 'Gerar assinatura'}
+            {isDocumentGenerating ? 'Gerando...' : 'Gerar rascunho'}
+          </Button>
+          <Button
+            variant="outlined"
+            onClick={handleSignDocument}
+            disabled={
+              !documentPreview ||
+              documentPreview.status !== 'DRAFT' ||
+              isDocumentSigning
+            }
+          >
+            {isDocumentSigning ? 'Assinando...' : 'Assinar'}
           </Button>
           <Button
             variant="contained"
             onClick={handleExportDocument}
-            disabled={!documentPreview || isDocumentExporting}
+            disabled={
+              !documentPreview ||
+              (documentPreview.status !== 'SIGNED' && documentPreview.status !== 'EXPORTED') ||
+              isDocumentExporting
+            }
           >
             {isDocumentExporting ? 'Exportando...' : 'Exportar'}
           </Button>

@@ -4,6 +4,7 @@
 use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::Mutex;
 
 use argon2::password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString};
@@ -308,6 +309,19 @@ impl DocumentType {
       DocumentType::Parecer => "PARECER",
     }
   }
+
+  fn from_str(value: &str) -> Option<Self> {
+    match value {
+      "RELATORIO" => Some(DocumentType::Relatorio),
+      "PARECER" => Some(DocumentType::Parecer),
+      _ => None,
+    }
+  }
+}
+
+fn parse_document_type(value: String) -> AppResult<DocumentType> {
+  DocumentType::from_str(&value)
+    .ok_or_else(|| AppError::new("document_type_invalid", "Tipo de documento inválido."))
 }
 
 #[derive(Debug, Deserialize)]
@@ -347,10 +361,77 @@ struct DocumentLogExportPayload {
   format: String,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DocumentsListFilters {
+  document_type: Option<DocumentType>,
+  status: Option<String>,
+  client_id: Option<String>,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct DocumentExportHtmlResponse {
   file_path: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DocumentDraftResponse {
+  document_id: String,
+  html: String,
+  status: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DocumentSignResponse {
+  document_id: String,
+  html_signed: String,
+  hash_html: String,
+  status: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DocumentExportPdfResponse {
+  document_id: String,
+  file_path: String,
+  hash_pdf: String,
+  status: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DocumentSummary {
+  id: String,
+  document_type: DocumentType,
+  client_id: Option<String>,
+  title: String,
+  status: String,
+  created_at: String,
+  updated_at: String,
+  hash_html: Option<String>,
+  hash_pdf: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DocumentDetail {
+  id: String,
+  document_type: DocumentType,
+  client_id: Option<String>,
+  title: String,
+  content_html: String,
+  hash_html: Option<String>,
+  lawyer_name: Option<String>,
+  lawyer_oab: Option<String>,
+  signed_at: Option<String>,
+  file_path: Option<String>,
+  hash_pdf: Option<String>,
+  status: String,
+  created_at: String,
+  updated_at: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -519,6 +600,7 @@ fn build_abnt_html(payload: &DocumentGeneratePayload) -> String {
   let office_name = html_escape(&payload.office_name);
   let client_name = html_escape(&payload.client_name);
   let client_document = html_escape(&payload.client_document);
+  let document_type = html_escape(payload.document_type.as_str());
   let generated_at = html_escape(&payload.generated_at);
   let attendance_date = html_escape(&payload.attendance_date);
   let client_email = payload
@@ -569,6 +651,7 @@ fn build_abnt_html(payload: &DocumentGeneratePayload) -> String {
   <h1>{}</h1>
   <div class=\"meta\">
     <p class=\"meta-line\">Escritório: {}</p>
+    <p class=\"meta-line\">Tipo de documento: {}</p>
     <p class=\"meta-line\">Cliente: {} ({})</p>
     {}
     <p class=\"meta-line\">Data do atendimento: {}</p>
@@ -585,6 +668,7 @@ fn build_abnt_html(payload: &DocumentGeneratePayload) -> String {
     title,
     title,
     office_name,
+    document_type,
     client_name,
     client_document,
     client_contact,
@@ -636,6 +720,67 @@ fn build_signature_block(
     resolved_date,
     hash_block.unwrap_or_default()
   )
+}
+
+fn build_document_signature_block(
+  lawyer_name: &str,
+  lawyer_oab: &str,
+  document_hash: Option<&str>,
+) -> String {
+  let resolved_name = html_escape(lawyer_name);
+  let resolved_oab = html_escape(lawyer_oab);
+  let hash_block = document_hash.map(|hash| {
+    format!(
+      "<div class=\"hash\">
+  <p>Hash SHA-256: {}</p>
+</div>",
+      html_escape(hash)
+    )
+  });
+  format!(
+    "<section class=\"signature\">
+  <hr />
+  <p>Dr(a). {} – OAB {}</p>
+  <p>Documento assinado digitalmente</p>
+  {}
+</section>",
+    resolved_name,
+    resolved_oab,
+    hash_block.unwrap_or_default()
+  )
+}
+
+fn documents_base_dir(app: &AppHandle) -> AppResult<PathBuf> {
+  let base_dir = app
+    .path_resolver()
+    .app_data_dir()
+    .ok_or_else(|| AppError::new("path_error", "Não foi possível localizar app_data."))?
+    .join("documents");
+  fs::create_dir_all(&base_dir)?;
+  Ok(base_dir)
+}
+
+fn sha256_file(path: &Path) -> AppResult<String> {
+  let data = fs::read(path)?;
+  Ok(sha256_hex(&data))
+}
+
+fn export_html_to_pdf(html: &str, output_path: &Path) -> AppResult<()> {
+  let html_path = output_path.with_extension("html");
+  fs::write(&html_path, html)?;
+
+  let status = Command::new("wkhtmltopdf")
+    .arg(&html_path)
+    .arg(output_path)
+    .status();
+
+  match status {
+    Ok(status) if status.success() => Ok(()),
+    _ => {
+      fs::write(output_path, html)?;
+      Ok(())
+    }
+  }
 }
 
 fn inject_signature_block(html: &str, signature_block: &str) -> String {
@@ -808,6 +953,30 @@ fn run_migrations(conn: &Connection) -> AppResult<()> {
       "\
       ALTER TABLE USERS ADD COLUMN oab_number TEXT;
       ALTER TABLE USERS ADD COLUMN oab_uf TEXT;
+      ",
+    ),
+    (
+      "0007_documents",
+      "\
+      CREATE TABLE IF NOT EXISTS DOCUMENTS(
+        id TEXT PRIMARY KEY,
+        document_type TEXT NOT NULL,
+        client_id TEXT,
+        title TEXT NOT NULL,
+        content_html TEXT NOT NULL,
+        hash_html TEXT,
+        lawyer_name TEXT,
+        lawyer_oab TEXT,
+        signed_at TEXT,
+        file_path TEXT,
+        hash_pdf TEXT,
+        status TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_documents_client_id ON DOCUMENTS(client_id);
+      CREATE INDEX IF NOT EXISTS idx_documents_status ON DOCUMENTS(status);
+      CREATE INDEX IF NOT EXISTS idx_documents_type ON DOCUMENTS(document_type);
       ",
     ),
   ];
@@ -2547,6 +2716,389 @@ fn documents_log_export(
 }
 
 #[tauri::command]
+fn documents_create_draft(
+  app: AppHandle,
+  state: State<'_, AppState>,
+  session_id: String,
+  payload: DocumentGeneratePayload,
+) -> AppResult<DocumentDraftResponse> {
+  let path = db_path(&app, &state)?;
+  let conn = open_connection(&path)?;
+  run_migrations(&conn)?;
+  let user = require_active_session(&conn, &session_id)?;
+  let now = now_iso();
+  let document_id = Uuid::new_v4().to_string();
+  let html = build_abnt_html(&payload);
+  let status = "DRAFT";
+
+  conn.execute(
+    "INSERT INTO DOCUMENTS
+      (id, document_type, client_id, title, content_html, status, created_at, updated_at)
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+    params![
+      document_id,
+      payload.document_type.as_str(),
+      payload.client_id,
+      payload.title,
+      html,
+      status,
+      now,
+      now
+    ],
+  )?;
+
+  insert_audit_log(
+    &conn,
+    &user.user_id,
+    "documento_criado",
+    Some("DOCUMENT"),
+    Some(&document_id),
+    Some("Documento criado em rascunho"),
+    Some(
+      &json!({
+        "documentId": document_id,
+        "documentType": payload.document_type.as_str(),
+        "appointmentId": payload.appointment_id
+      })
+      .to_string(),
+    ),
+  )?;
+
+  Ok(DocumentDraftResponse {
+    document_id,
+    html,
+    status: status.to_string(),
+  })
+}
+
+#[tauri::command]
+fn documents_sign(
+  app: AppHandle,
+  state: State<'_, AppState>,
+  session_id: String,
+  document_id: String,
+  lawyer_name: String,
+  lawyer_oab: String,
+) -> AppResult<DocumentSignResponse> {
+  let path = db_path(&app, &state)?;
+  let conn = open_connection(&path)?;
+  run_migrations(&conn)?;
+  let user = require_active_session(&conn, &session_id)?;
+
+  let trimmed_name = lawyer_name.trim();
+  let trimmed_oab = lawyer_oab.trim();
+  if trimmed_name.is_empty() || trimmed_oab.is_empty() {
+    return Err(AppError::new(
+      "validation_error",
+      "Nome e OAB do advogado são obrigatórios.",
+    ));
+  }
+
+  let mut stmt = conn.prepare(
+    "SELECT content_html, status, hash_html FROM DOCUMENTS WHERE id = ?1",
+  )?;
+  let document_row = stmt
+    .query_row(params![document_id], |row| {
+      Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, Option<String>>(2)?))
+    })
+    .optional()?;
+
+  let (content_html, current_status, existing_hash) = match document_row {
+    Some(values) => values,
+    None => return Err(AppError::new("not_found", "Documento não encontrado.")),
+  };
+
+  if current_status != "DRAFT" {
+    let hash_html = existing_hash.ok_or_else(|| {
+      AppError::new("document_unsigned", "Documento já foi assinado.")
+    })?;
+    return Ok(DocumentSignResponse {
+      document_id,
+      html_signed: content_html,
+      hash_html,
+      status: current_status,
+    });
+  }
+
+  let signature_block_for_hash =
+    build_document_signature_block(trimmed_name, trimmed_oab, None);
+  let signed_html_for_hash = inject_signature_block(&content_html, &signature_block_for_hash);
+  let normalized_html = normalize_html_for_hash(&signed_html_for_hash);
+  let hash_html = sha256_hex(normalized_html.as_bytes());
+  let signature_block =
+    build_document_signature_block(trimmed_name, trimmed_oab, Some(&hash_html));
+  let signed_html = inject_signature_block(&content_html, &signature_block);
+  let now = now_iso();
+  let status = "SIGNED";
+
+  conn.execute(
+    "UPDATE DOCUMENTS
+     SET content_html = ?1, hash_html = ?2, lawyer_name = ?3, lawyer_oab = ?4,
+         signed_at = ?5, status = ?6, updated_at = ?7
+     WHERE id = ?8",
+    params![
+      signed_html,
+      hash_html,
+      trimmed_name,
+      trimmed_oab,
+      now,
+      status,
+      now,
+      document_id
+    ],
+  )?;
+
+  insert_audit_log(
+    &conn,
+    &user.user_id,
+    "documento_assinado",
+    Some("DOCUMENT"),
+    Some(&document_id),
+    Some("Documento assinado"),
+    Some(
+      &json!({
+        "documentId": document_id,
+        "hashHtml": hash_html
+      })
+      .to_string(),
+    ),
+  )?;
+
+  Ok(DocumentSignResponse {
+    document_id,
+    html_signed: signed_html,
+    hash_html,
+    status: status.to_string(),
+  })
+}
+
+#[tauri::command]
+fn documents_export_pdf(
+  app: AppHandle,
+  state: State<'_, AppState>,
+  session_id: String,
+  document_id: String,
+) -> AppResult<DocumentExportPdfResponse> {
+  let path = db_path(&app, &state)?;
+  let conn = open_connection(&path)?;
+  run_migrations(&conn)?;
+  let user = require_active_session(&conn, &session_id)?;
+
+  let mut stmt = conn.prepare(
+    "SELECT document_type, content_html, status FROM DOCUMENTS WHERE id = ?1",
+  )?;
+  let document_row = stmt
+    .query_row(params![document_id], |row| {
+      Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?))
+    })
+    .optional()?;
+
+  let (document_type, content_html, status) = match document_row {
+    Some(values) => values,
+    None => return Err(AppError::new("not_found", "Documento não encontrado.")),
+  };
+
+  if status == "DRAFT" {
+    return Err(AppError::new(
+      "document_not_signed",
+      "Documento precisa ser assinado antes da exportação.",
+    ));
+  }
+
+  let base_dir = documents_base_dir(&app)?;
+  let file_name = format!("{}_{}.pdf", document_type, document_id);
+  let output_path = base_dir.join(file_name);
+  export_html_to_pdf(&content_html, &output_path)?;
+  let hash_pdf = sha256_file(&output_path)?;
+  let now = now_iso();
+  let status = "EXPORTED";
+  let output_path_string = output_path.to_string_lossy().to_string();
+
+  conn.execute(
+    "UPDATE DOCUMENTS
+     SET file_path = ?1, hash_pdf = ?2, status = ?3, updated_at = ?4
+     WHERE id = ?5",
+    params![output_path_string, hash_pdf, status, now, document_id],
+  )?;
+
+  insert_audit_log(
+    &conn,
+    &user.user_id,
+    "documento_exportado",
+    Some("DOCUMENT"),
+    Some(&document_id),
+    Some("Documento exportado"),
+    Some(
+      &json!({
+        "documentId": document_id,
+        "filePath": output_path_string,
+        "hashPdf": hash_pdf
+      })
+      .to_string(),
+    ),
+  )?;
+
+  Ok(DocumentExportPdfResponse {
+    document_id,
+    file_path: output_path_string,
+    hash_pdf,
+    status: status.to_string(),
+  })
+}
+
+#[tauri::command]
+fn documents_get(
+  app: AppHandle,
+  state: State<'_, AppState>,
+  session_id: String,
+  document_id: String,
+) -> AppResult<DocumentDetail> {
+  let path = db_path(&app, &state)?;
+  let conn = open_connection(&path)?;
+  run_migrations(&conn)?;
+  require_active_session(&conn, &session_id)?;
+
+  let mut stmt = conn.prepare(
+    "SELECT id, document_type, client_id, title, content_html, hash_html, lawyer_name, lawyer_oab,
+            signed_at, file_path, hash_pdf, status, created_at, updated_at
+     FROM DOCUMENTS WHERE id = ?1",
+  )?;
+  let document_row = stmt
+    .query_row(params![document_id], |row| {
+      Ok((
+        row.get::<_, String>(0)?,
+        row.get::<_, String>(1)?,
+        row.get::<_, Option<String>>(2)?,
+        row.get::<_, String>(3)?,
+        row.get::<_, String>(4)?,
+        row.get::<_, Option<String>>(5)?,
+        row.get::<_, Option<String>>(6)?,
+        row.get::<_, Option<String>>(7)?,
+        row.get::<_, Option<String>>(8)?,
+        row.get::<_, Option<String>>(9)?,
+        row.get::<_, Option<String>>(10)?,
+        row.get::<_, String>(11)?,
+        row.get::<_, String>(12)?,
+        row.get::<_, String>(13)?,
+      ))
+    })
+    .optional()?;
+
+  let (
+    id,
+    document_type,
+    client_id,
+    title,
+    content_html,
+    hash_html,
+    lawyer_name,
+    lawyer_oab,
+    signed_at,
+    file_path,
+    hash_pdf,
+    status,
+    created_at,
+    updated_at,
+  ) = document_row.ok_or_else(|| AppError::new("not_found", "Documento não encontrado."))?;
+
+  Ok(DocumentDetail {
+    id,
+    document_type: parse_document_type(document_type)?,
+    client_id,
+    title,
+    content_html,
+    hash_html,
+    lawyer_name,
+    lawyer_oab,
+    signed_at,
+    file_path,
+    hash_pdf,
+    status,
+    created_at,
+    updated_at,
+  })
+}
+
+#[tauri::command]
+fn documents_list(
+  app: AppHandle,
+  state: State<'_, AppState>,
+  session_id: String,
+  filters: DocumentsListFilters,
+) -> AppResult<Vec<DocumentSummary>> {
+  let path = db_path(&app, &state)?;
+  let conn = open_connection(&path)?;
+  run_migrations(&conn)?;
+  require_active_session(&conn, &session_id)?;
+
+  let mut sql = String::from(
+    "SELECT id, document_type, client_id, title, status, created_at, updated_at, hash_html, hash_pdf \
+     FROM DOCUMENTS WHERE 1=1",
+  );
+  let mut params: Vec<String> = Vec::new();
+
+  if let Some(document_type) = filters.document_type {
+    sql.push_str(" AND document_type = ?");
+    params.push(document_type.as_str().to_string());
+  }
+
+  if let Some(status) = filters.status {
+    sql.push_str(" AND status = ?");
+    params.push(status);
+  }
+
+  if let Some(client_id) = filters.client_id {
+    sql.push_str(" AND client_id = ?");
+    params.push(client_id);
+  }
+
+  sql.push_str(" ORDER BY created_at DESC");
+
+  let mut stmt = conn.prepare(&sql)?;
+  let rows = stmt.query_map(params_from_iter(params.iter()), |row| {
+    Ok((
+      row.get::<_, String>(0)?,
+      row.get::<_, String>(1)?,
+      row.get::<_, Option<String>>(2)?,
+      row.get::<_, String>(3)?,
+      row.get::<_, String>(4)?,
+      row.get::<_, String>(5)?,
+      row.get::<_, String>(6)?,
+      row.get::<_, Option<String>>(7)?,
+      row.get::<_, Option<String>>(8)?,
+    ))
+  })?;
+
+  let mut documents = Vec::new();
+  for row in rows {
+    let (
+      id,
+      document_type,
+      client_id,
+      title,
+      status,
+      created_at,
+      updated_at,
+      hash_html,
+      hash_pdf,
+    ) = row?;
+    documents.push(DocumentSummary {
+      id,
+      document_type: parse_document_type(document_type)?,
+      client_id,
+      title,
+      status,
+      created_at,
+      updated_at,
+      hash_html,
+      hash_pdf,
+    });
+  }
+
+  Ok(documents)
+}
+
+#[tauri::command]
 fn attendances_list(
   app: AppHandle,
   state: State<'_, AppState>,
@@ -2779,6 +3331,11 @@ fn main() {
       documents_generate_html,
       documents_export_html,
       documents_log_export,
+      documents_create_draft,
+      documents_sign,
+      documents_export_pdf,
+      documents_get,
+      documents_list,
       attendances_list,
       attendances_create,
       attendances_update,
