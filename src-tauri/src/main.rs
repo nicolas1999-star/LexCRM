@@ -131,13 +131,48 @@ struct Team {
   updated_at: String,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone, Copy)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+enum AttendanceChannel {
+  Presencial,
+  Whatsapp,
+  Telefone,
+  Email,
+  Video,
+}
+
+impl AttendanceChannel {
+  fn as_str(&self) -> &'static str {
+    match self {
+      AttendanceChannel::Presencial => "PRESENCIAL",
+      AttendanceChannel::Whatsapp => "WHATSAPP",
+      AttendanceChannel::Telefone => "TELEFONE",
+      AttendanceChannel::Email => "EMAIL",
+      AttendanceChannel::Video => "VIDEO",
+    }
+  }
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct AttendanceSummary {
   id: String,
   client_id: String,
   occurred_at: String,
-  channel: String,
+  channel: AttendanceChannel,
+  subject: String,
+  notes: String,
+  created_at: String,
+  updated_at: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AttendanceDetail {
+  id: String,
+  client_id: String,
+  occurred_at: String,
+  channel: AttendanceChannel,
   subject: String,
   notes: String,
   created_at: String,
@@ -148,7 +183,7 @@ struct AttendanceSummary {
 #[serde(rename_all = "camelCase")]
 struct AttendancePayload {
   occurred_at: String,
-  channel: String,
+  channel: AttendanceChannel,
   subject: String,
   notes: String,
 }
@@ -342,6 +377,13 @@ fn run_migrations(conn: &Connection) -> AppResult<()> {
       CREATE INDEX IF NOT EXISTS idx_attendances_client_id ON ATTENDANCES(client_id);
       ",
     ),
+    (
+      "0004_attendances_indexes",
+      "\
+      CREATE INDEX IF NOT EXISTS idx_attendances_client_id_occurred_at
+      ON ATTENDANCES(client_id, occurred_at);
+      ",
+    ),
   ];
 
   for (id, sql) in migrations {
@@ -463,24 +505,34 @@ fn ensure_client_exists(conn: &Connection, client_id: &str) -> AppResult<()> {
   Ok(())
 }
 
-fn validate_attendance_payload(payload: &AttendancePayload) -> AppResult<(String, String, String, String)> {
+fn parse_attendance_channel(value: &str) -> AppResult<AttendanceChannel> {
+  match value {
+    "PRESENCIAL" => Ok(AttendanceChannel::Presencial),
+    "WHATSAPP" => Ok(AttendanceChannel::Whatsapp),
+    "TELEFONE" => Ok(AttendanceChannel::Telefone),
+    "EMAIL" => Ok(AttendanceChannel::Email),
+    "VIDEO" => Ok(AttendanceChannel::Video),
+    _ => Err(AppError::new(
+      "validation_failed",
+      "Canal inválido para atendimento.",
+    )),
+  }
+}
+
+fn validate_attendance_payload(
+  payload: &AttendancePayload,
+) -> AppResult<(String, AttendanceChannel, String, String)> {
   let occurred_at = payload.occurred_at.trim().to_string();
+  if occurred_at.is_empty() {
+    return Err(AppError::new(
+      "validation_failed",
+      "occurredAt é obrigatório.",
+    ));
+  }
   if chrono::DateTime::parse_from_rfc3339(&occurred_at).is_err() {
     return Err(AppError::new(
       "validation_failed",
       "occurredAt deve estar no formato ISO.",
-    ));
-  }
-
-  let channel = payload.channel.trim().to_uppercase();
-  let valid_channel = matches!(
-    channel.as_str(),
-    "PRESENCIAL" | "WHATSAPP" | "TELEFONE" | "EMAIL" | "VIDEO"
-  );
-  if !valid_channel {
-    return Err(AppError::new(
-      "validation_failed",
-      "Canal inválido para atendimento.",
     ));
   }
 
@@ -500,7 +552,7 @@ fn validate_attendance_payload(payload: &AttendancePayload) -> AppResult<(String
     ));
   }
 
-  Ok((occurred_at, channel, subject, notes))
+  Ok((occurred_at, payload.channel, subject, notes))
 }
 
 fn handle_constraint_error(err: rusqlite::Error) -> AppError {
@@ -1500,22 +1552,20 @@ fn attendances_list(
      WHERE client_id = ?1
      ORDER BY occurred_at DESC, created_at DESC",
   )?;
-  let rows = stmt.query_map(params![client_id], |row| {
-    Ok(AttendanceSummary {
+  let mut rows = stmt.query(params![client_id])?;
+  let mut attendances = Vec::new();
+  while let Some(row) = rows.next()? {
+    let channel: String = row.get(3)?;
+    attendances.push(AttendanceSummary {
       id: row.get(0)?,
       client_id: row.get(1)?,
       occurred_at: row.get(2)?,
-      channel: row.get(3)?,
+      channel: parse_attendance_channel(channel.trim())?,
       subject: row.get(4)?,
       notes: row.get(5)?,
       created_at: row.get(6)?,
       updated_at: row.get(7)?,
-    })
-  })?;
-
-  let mut attendances = Vec::new();
-  for row in rows {
-    attendances.push(row?);
+    });
   }
 
   Ok(attendances)
@@ -1528,7 +1578,7 @@ fn attendances_create(
   session_id: String,
   client_id: String,
   payload: AttendancePayload,
-) -> AppResult<AttendanceSummary> {
+) -> AppResult<AttendanceDetail> {
   let path = db_path(&app, &state)?;
   let conn = open_connection(&path)?;
   run_migrations(&conn)?;
@@ -1538,6 +1588,7 @@ fn attendances_create(
   let (occurred_at, channel, subject, notes) = validate_attendance_payload(&payload)?;
   let now = now_iso();
   let id = Uuid::new_v4().to_string();
+  let channel_value = channel.as_str();
 
   if let Err(err) = conn.execute(
     "INSERT INTO ATTENDANCES (id, client_id, occurred_at, channel, subject, notes, created_at, updated_at)
@@ -1546,7 +1597,7 @@ fn attendances_create(
       id,
       client_id,
       occurred_at,
-      channel,
+      channel_value,
       subject,
       notes,
       now,
@@ -1566,7 +1617,7 @@ fn attendances_create(
     None,
   )?;
 
-  Ok(AttendanceSummary {
+  Ok(AttendanceDetail {
     id,
     client_id,
     occurred_at,
@@ -1583,9 +1634,9 @@ fn attendances_update(
   app: AppHandle,
   state: State<'_, AppState>,
   session_id: String,
-  id: String,
+  attendance_id: String,
   payload: AttendancePayload,
-) -> AppResult<AttendanceSummary> {
+) -> AppResult<AttendanceDetail> {
   let path = db_path(&app, &state)?;
   let conn = open_connection(&path)?;
   run_migrations(&conn)?;
@@ -1594,7 +1645,7 @@ fn attendances_update(
   let mut stmt = conn.prepare(
     "SELECT client_id, created_at FROM ATTENDANCES WHERE id = ?1",
   )?;
-  let current = stmt.query_row(params![id.clone()], |row| {
+  let current = stmt.query_row(params![attendance_id.clone()], |row| {
     Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
   });
   let (client_id, created_at) = match current {
@@ -1607,12 +1658,13 @@ fn attendances_update(
 
   let (occurred_at, channel, subject, notes) = validate_attendance_payload(&payload)?;
   let now = now_iso();
+  let channel_value = channel.as_str();
 
   if let Err(err) = conn.execute(
     "UPDATE ATTENDANCES
      SET occurred_at = ?1, channel = ?2, subject = ?3, notes = ?4, updated_at = ?5
      WHERE id = ?6",
-    params![occurred_at, channel, subject, notes, now, id],
+    params![occurred_at, channel_value, subject, notes, now, attendance_id],
   ) {
     return Err(handle_constraint_error(err));
   }
@@ -1622,13 +1674,13 @@ fn attendances_update(
     &user.user_id,
     "update_attendance",
     Some("ATTENDANCE"),
-    Some(&id),
+    Some(&attendance_id),
     Some("Atendimento atualizado"),
     None,
   )?;
 
-  Ok(AttendanceSummary {
-    id,
+  Ok(AttendanceDetail {
+    id: attendance_id,
     client_id,
     occurred_at,
     channel,
@@ -1644,7 +1696,7 @@ fn attendances_delete(
   app: AppHandle,
   state: State<'_, AppState>,
   session_id: String,
-  id: String,
+  attendance_id: String,
 ) -> AppResult<()> {
   let path = db_path(&app, &state)?;
   let conn = open_connection(&path)?;
@@ -1652,15 +1704,20 @@ fn attendances_delete(
   let user = require_active_session(&conn, &session_id)?;
 
   let exists: Option<String> = conn
-    .query_row("SELECT id FROM ATTENDANCES WHERE id = ?1", params![id], |row| {
-      row.get(0)
-    })
+    .query_row(
+      "SELECT id FROM ATTENDANCES WHERE id = ?1",
+      params![attendance_id],
+      |row| row.get(0),
+    )
     .optional()?;
   if exists.is_none() {
     return Err(AppError::new("attendance_not_found", "Atendimento não encontrado."));
   }
 
-  conn.execute("DELETE FROM ATTENDANCES WHERE id = ?1", params![id])?;
+  conn.execute(
+    "DELETE FROM ATTENDANCES WHERE id = ?1",
+    params![attendance_id],
+  )?;
   insert_audit_log(
     &conn,
     &user.user_id,
