@@ -4,7 +4,6 @@
 use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::Mutex;
 
 use argon2::password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString};
@@ -287,12 +286,6 @@ struct AttendancePayload {
 #[serde(rename_all = "camelCase")]
 struct DocumentHtmlResponse {
   html: String,
-  document_id: String,
-  document_hash: String,
-  content_hash: String,
-  created_at: String,
-  authored_by_name: String,
-  authored_by_oab: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Copy)]
@@ -328,7 +321,7 @@ fn parse_document_type(value: String) -> AppResult<DocumentType> {
 #[serde(rename_all = "camelCase")]
 struct DocumentGeneratePayload {
   document_type: DocumentType,
-  office_name: String,
+  office_name: Option<String>,
   generated_at: String,
   client_id: String,
   client_name: String,
@@ -346,19 +339,7 @@ struct DocumentGeneratePayload {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct DocumentExportHtmlPayload {
-  file_path: String,
   document_id: String,
-  document_type: Option<DocumentType>,
-  appointment_id: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct DocumentLogExportPayload {
-  document_id: String,
-  document_type: Option<DocumentType>,
-  appointment_id: Option<String>,
-  format: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -372,33 +353,8 @@ struct DocumentsListFilters {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct DocumentExportHtmlResponse {
-  file_path: String,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct DocumentDraftResponse {
-  document_id: String,
+  filename: String,
   html: String,
-  status: String,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct DocumentSignResponse {
-  document_id: String,
-  html_signed: String,
-  hash_html: String,
-  status: String,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct DocumentExportPdfResponse {
-  document_id: String,
-  file_path: String,
-  hash_pdf: String,
-  status: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -411,8 +367,7 @@ struct DocumentSummary {
   status: String,
   created_at: String,
   updated_at: String,
-  hash_html: Option<String>,
-  hash_pdf: Option<String>,
+  content_sha256: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -421,17 +376,86 @@ struct DocumentDetail {
   id: String,
   document_type: DocumentType,
   client_id: Option<String>,
+  case_id: Option<String>,
   title: String,
-  content_html: String,
-  hash_html: Option<String>,
-  lawyer_name: Option<String>,
-  lawyer_oab: Option<String>,
+  payload_json: String,
+  html_preview: String,
+  content_sha256: Option<String>,
+  signed_by_lawyer_id: Option<String>,
+  signed_by_label: Option<String>,
   signed_at: Option<String>,
-  file_path: Option<String>,
-  hash_pdf: Option<String>,
   status: String,
   created_at: String,
   updated_at: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DocumentDraftPayload {
+  payload_json: String,
+  html_preview: String,
+  title: String,
+  client_id: Option<String>,
+  case_id: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LawyerSummary {
+  id: String,
+  name: String,
+  oab: String,
+  oab_uf: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LawyerDetail {
+  id: String,
+  name: String,
+  oab: String,
+  oab_uf: String,
+  email: Option<String>,
+  phone: Option<String>,
+  address: Option<String>,
+  created_at: String,
+  updated_at: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct LawyerPayload {
+  name: String,
+  oab: String,
+  oab_uf: String,
+  email: Option<String>,
+  phone: Option<String>,
+  address: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct OfficeProfile {
+  id: String,
+  office_name: String,
+  office_address: String,
+  office_email: String,
+  office_phone: String,
+  logo_data_url: String,
+  default_lawyer_id: Option<String>,
+  created_at: String,
+  updated_at: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct OfficeProfilePayload {
+  office_name: Option<String>,
+  office_address: Option<String>,
+  office_email: Option<String>,
+  office_phone: Option<String>,
+  logo_data_url: Option<String>,
+  default_lawyer_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -508,7 +532,7 @@ fn now_iso() -> String {
 }
 
 fn normalize_html_for_hash(html: &str) -> String {
-  html.replace("\r\n", "\n").replace('\r', "\n").trim_end().to_string()
+  html.replace("\r\n", "\n").replace('\r', "\n").trim().to_string()
 }
 
 fn normalize_optional_field(value: Option<String>) -> Option<String> {
@@ -521,9 +545,6 @@ fn normalize_optional_field(value: Option<String>) -> Option<String> {
     }
   })
 }
-
-const DEFAULT_SIGNATURE_NAME: &str = "Jorge Nicolas Paiva de Sousa";
-const DEFAULT_SIGNATURE_OAB: &str = "OAB/SP 490052";
 
 fn html_escape(input: &str) -> String {
   let mut escaped = String::with_capacity(input.len());
@@ -576,28 +597,27 @@ fn build_section_paragraphs(content: &str) -> String {
     .join("\n")
 }
 
-fn resolve_signature_identity(
-  user_name: String,
-  oab_number: Option<String>,
-  oab_uf: Option<String>,
-) -> (String, String) {
-  let resolved_name = if user_name.trim().is_empty() {
-    DEFAULT_SIGNATURE_NAME.to_string()
-  } else {
-    user_name
-  };
-  let oab_number = normalize_optional_field(oab_number);
-  let oab_uf = normalize_optional_field(oab_uf);
-  let resolved_oab = match (oab_number, oab_uf) {
-    (Some(number), Some(uf)) => format!("OAB/{} {}", uf, number),
-    _ => DEFAULT_SIGNATURE_OAB.to_string(),
-  };
-  (resolved_name, resolved_oab)
+#[derive(Debug)]
+struct DocumentOfficeInfo {
+  name: String,
+  address: String,
+  email: String,
+  phone: String,
+  logo_data_url: Option<String>,
 }
 
-fn build_abnt_html(payload: &DocumentGeneratePayload) -> String {
+fn build_abnt_html(payload: &DocumentGeneratePayload, office: &DocumentOfficeInfo) -> String {
   let title = html_escape(&payload.title);
-  let office_name = html_escape(&payload.office_name);
+  let office_name = html_escape(&office.name);
+  let office_address = html_escape(&office.address);
+  let office_email = html_escape(&office.email);
+  let office_phone = html_escape(&office.phone);
+  let office_logo = office
+    .logo_data_url
+    .as_deref()
+    .filter(|value| !value.trim().is_empty())
+    .map(|value| format!("<img src=\"{}\" alt=\"Logo\" />", html_escape(value)))
+    .unwrap_or_default();
   let client_name = html_escape(&payload.client_name);
   let client_document = html_escape(&payload.client_document);
   let document_type = html_escape(payload.document_type.as_str());
@@ -626,6 +646,25 @@ fn build_abnt_html(payload: &DocumentGeneratePayload) -> String {
     ),
   };
 
+  let mut office_parts = Vec::new();
+  if !office_address.is_empty() {
+    office_parts.push(office_address);
+  }
+  if !office_email.is_empty() {
+    office_parts.push(office_email);
+  }
+  if !office_phone.is_empty() {
+    office_parts.push(office_phone);
+  }
+  let office_contact = if office_parts.is_empty() {
+    String::new()
+  } else {
+    format!(
+      "<p class=\"office-contact\">{}</p>",
+      office_parts.join(" · ")
+    )
+  };
+
   format!(
     "<!doctype html>
 <html lang=\"pt-BR\">
@@ -633,24 +672,100 @@ fn build_abnt_html(payload: &DocumentGeneratePayload) -> String {
   <meta charset=\"utf-8\" />
   <title>{}</title>
   <style>
+    :root {{
+      --accent: #2b3a55;
+      --muted: #5b6b7a;
+      --light: #f4f6f8;
+    }}
     @page {{ size: A4; margin: 3cm 2cm 2cm 3cm; }}
-    body {{ font-family: \"Times New Roman\", Times, serif; font-size: 12pt; line-height: 1.5; text-align: justify; }}
+    body {{
+      font-family: \"Source Serif 4\", \"Times New Roman\", Times, serif;
+      font-size: 12pt;
+      line-height: 1.6;
+      color: #1f2933;
+      text-align: justify;
+    }}
     p {{ text-indent: 1.25cm; margin: 0 0 12pt 0; }}
-    h1 {{ text-align: center; font-size: 14pt; font-weight: bold; text-transform: uppercase; margin: 0 0 24pt 0; }}
-    h2 {{ font-size: 12pt; font-weight: bold; text-transform: uppercase; margin: 24pt 0 12pt 0; }}
-    .signature {{ margin-top: 48pt; text-align: center; }}
-    .signature p {{ text-indent: 0; margin: 0; }}
-    .hash {{ font-size: 9pt; margin-top: 18pt; word-break: break-word; text-align: left; }}
-    .hash p {{ text-indent: 0; margin: 0 0 6pt 0; }}
-    .meta {{ font-size: 10pt; margin-top: 12pt; text-align: left; }}
+    h1 {{
+      text-align: center;
+      font-size: 14pt;
+      font-weight: 700;
+      text-transform: uppercase;
+      color: var(--accent);
+      margin: 12pt 0 24pt 0;
+    }}
+    h2 {{
+      font-size: 12pt;
+      font-weight: 700;
+      text-transform: uppercase;
+      color: var(--accent);
+      margin: 24pt 0 12pt 0;
+    }}
+    .header {{
+      border-bottom: 1px solid var(--accent);
+      padding-bottom: 12pt;
+      margin-bottom: 18pt;
+      display: flex;
+      align-items: center;
+      gap: 16pt;
+    }}
+    .header .logo img {{ max-height: 48pt; }}
+    .header .office {{
+      text-align: left;
+      font-size: 11pt;
+    }}
+    .header .office-name {{
+      font-weight: 700;
+      text-transform: uppercase;
+      color: var(--accent);
+      margin-bottom: 4pt;
+    }}
+    .header .office-contact {{
+      color: var(--muted);
+      font-size: 9.5pt;
+      text-indent: 0;
+      margin: 0;
+    }}
+    .meta {{
+      font-size: 10.5pt;
+      margin-top: 12pt;
+      text-align: left;
+      color: var(--muted);
+    }}
     .meta p {{ text-indent: 0; margin: 0 0 6pt 0; }}
-    hr {{ border: 0; border-top: 1px solid #000; margin: 24pt 0; }}
+    .signature {{
+      margin-top: 42pt;
+      text-align: left;
+      background: var(--light);
+      border-radius: 6pt;
+      padding: 16pt;
+    }}
+    .signature p {{
+      text-indent: 0;
+      margin: 0 0 6pt 0;
+    }}
+    .signature .title {{
+      font-weight: 700;
+      color: var(--accent);
+    }}
+    .hash {{
+      font-size: 9pt;
+      margin-top: 12pt;
+      word-break: break-word;
+    }}
+    hr {{ border: 0; border-top: 1px solid var(--accent); margin: 24pt 0; }}
   </style>
 </head>
 <body>
+  <header class=\"header\">
+    <div class=\"logo\">{}</div>
+    <div class=\"office\">
+      <div class=\"office-name\">{}</div>
+      {}
+    </div>
+  </header>
   <h1>{}</h1>
   <div class=\"meta\">
-    <p class=\"meta-line\">Escritório: {}</p>
     <p class=\"meta-line\">Tipo de documento: {}</p>
     <p class=\"meta-line\">Cliente: {} ({})</p>
     {}
@@ -666,8 +781,10 @@ fn build_abnt_html(payload: &DocumentGeneratePayload) -> String {
 </body>
 </html>",
     title,
-    title,
+    office_logo,
     office_name,
+    office_contact,
+    title,
     document_type,
     client_name,
     client_document,
@@ -680,107 +797,32 @@ fn build_abnt_html(payload: &DocumentGeneratePayload) -> String {
   )
 }
 
-fn build_signature_block(
-  authored_by_user_name: &str,
-  authored_by_oab: &str,
-  office_name: &str,
-  created_at: &str,
+fn build_document_signature_block(
+  signed_by_label: &str,
+  signed_at: &str,
   document_hash: Option<&str>,
 ) -> String {
+  let resolved_label = html_escape(signed_by_label);
+  let resolved_date = html_escape(signed_at);
   let hash_block = document_hash.map(|hash| {
     format!(
       "<div class=\"hash\">
-  <p>Hash SHA-256 do conteúdo final:</p>
-  <p>{}</p>
+  <p>Hash SHA-256 do conteúdo final: {}</p>
 </div>",
       html_escape(hash)
     )
   });
-  let resolved_name = html_escape(authored_by_user_name);
-  let resolved_oab = html_escape(authored_by_oab);
-  let resolved_office = html_escape(office_name);
-  let resolved_date = html_escape(created_at);
   format!(
     "<section class=\"signature\">
-  <hr />
+  <p class=\"title\">Documento assinado</p>
   <p>{}</p>
-  <p>{}</p>
-</section>
-<div class=\"meta\">
-  <p>Assinado digitalmente por: {} ({})</p>
-  <p>Escritório: {}</p>
   <p>Data: {}</p>
-</div>
-{}",
-    resolved_name,
-    resolved_oab,
-    resolved_name,
-    resolved_oab,
-    resolved_office,
+  {}
+</section>",
+    resolved_label,
     resolved_date,
     hash_block.unwrap_or_default()
   )
-}
-
-fn build_document_signature_block(
-  lawyer_name: &str,
-  lawyer_oab: &str,
-  document_hash: Option<&str>,
-) -> String {
-  let resolved_name = html_escape(lawyer_name);
-  let resolved_oab = html_escape(lawyer_oab);
-  let hash_block = document_hash.map(|hash| {
-    format!(
-      "<div class=\"hash\">
-  <p>Hash SHA-256: {}</p>
-</div>",
-      html_escape(hash)
-    )
-  });
-  format!(
-    "<section class=\"signature\">
-  <hr />
-  <p>Dr(a). {} – OAB {}</p>
-  <p>Documento assinado digitalmente</p>
-  {}
-</section>",
-    resolved_name,
-    resolved_oab,
-    hash_block.unwrap_or_default()
-  )
-}
-
-fn documents_base_dir(app: &AppHandle) -> AppResult<PathBuf> {
-  let base_dir = app
-    .path_resolver()
-    .app_data_dir()
-    .ok_or_else(|| AppError::new("path_error", "Não foi possível localizar app_data."))?
-    .join("documents");
-  fs::create_dir_all(&base_dir)?;
-  Ok(base_dir)
-}
-
-fn sha256_file(path: &Path) -> AppResult<String> {
-  let data = fs::read(path)?;
-  Ok(sha256_hex(&data))
-}
-
-fn export_html_to_pdf(html: &str, output_path: &Path) -> AppResult<()> {
-  let html_path = output_path.with_extension("html");
-  fs::write(&html_path, html)?;
-
-  let status = Command::new("wkhtmltopdf")
-    .arg(&html_path)
-    .arg(output_path)
-    .status();
-
-  match status {
-    Ok(status) if status.success() => Ok(()),
-    _ => {
-      fs::write(output_path, html)?;
-      Ok(())
-    }
-  }
 }
 
 fn inject_signature_block(html: &str, signature_block: &str) -> String {
@@ -979,6 +1021,33 @@ fn run_migrations(conn: &Connection) -> AppResult<()> {
       CREATE INDEX IF NOT EXISTS idx_documents_type ON DOCUMENTS(document_type);
       ",
     ),
+    (
+      "0008_lawyers_office_documents",
+      "\
+      CREATE TABLE IF NOT EXISTS LAWYERS(
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        oab TEXT NOT NULL,
+        oab_uf TEXT NOT NULL,
+        email TEXT,
+        phone TEXT,
+        address TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS OFFICE_PROFILE(
+        id TEXT PRIMARY KEY,
+        office_name TEXT,
+        office_address TEXT,
+        office_email TEXT,
+        office_phone TEXT,
+        logo_data_url TEXT,
+        default_lawyer_id TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      ",
+    ),
   ];
 
   for (id, sql) in migrations {
@@ -999,6 +1068,107 @@ fn run_migrations(conn: &Connection) -> AppResult<()> {
     }
   }
 
+  ensure_documents_columns(conn)?;
+  ensure_default_office_profile(conn)?;
+
+  Ok(())
+}
+
+fn table_exists(conn: &Connection, table: &str) -> AppResult<bool> {
+  let mut stmt = conn.prepare(
+    "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?1",
+  )?;
+  let exists = stmt
+    .query_row(params![table], |row| row.get::<_, String>(0))
+    .optional()?
+    .is_some();
+  Ok(exists)
+}
+
+fn table_has_column(conn: &Connection, table: &str, column: &str) -> AppResult<bool> {
+  let mut stmt = conn.prepare(&format!("PRAGMA table_info({})", table))?;
+  let rows = stmt.query_map([], |row| row.get::<_, String>(1))?;
+  for row in rows {
+    if row?.eq_ignore_ascii_case(column) {
+      return Ok(true);
+    }
+  }
+  Ok(false)
+}
+
+fn ensure_column(conn: &Connection, table: &str, column: &str, sql: &str) -> AppResult<()> {
+  if !table_has_column(conn, table, column)? {
+    conn.execute(sql, [])?;
+  }
+  Ok(())
+}
+
+fn ensure_documents_columns(conn: &Connection) -> AppResult<()> {
+  if !table_exists(conn, "DOCUMENTS")? {
+    return Ok(());
+  }
+
+  ensure_column(
+    conn,
+    "DOCUMENTS",
+    "case_id",
+    "ALTER TABLE DOCUMENTS ADD COLUMN case_id TEXT",
+  )?;
+  ensure_column(
+    conn,
+    "DOCUMENTS",
+    "payload_json",
+    "ALTER TABLE DOCUMENTS ADD COLUMN payload_json TEXT",
+  )?;
+  ensure_column(
+    conn,
+    "DOCUMENTS",
+    "html_preview",
+    "ALTER TABLE DOCUMENTS ADD COLUMN html_preview TEXT",
+  )?;
+  ensure_column(
+    conn,
+    "DOCUMENTS",
+    "signed_by_lawyer_id",
+    "ALTER TABLE DOCUMENTS ADD COLUMN signed_by_lawyer_id TEXT",
+  )?;
+  ensure_column(
+    conn,
+    "DOCUMENTS",
+    "signed_by_label",
+    "ALTER TABLE DOCUMENTS ADD COLUMN signed_by_label TEXT",
+  )?;
+  ensure_column(
+    conn,
+    "DOCUMENTS",
+    "content_sha256",
+    "ALTER TABLE DOCUMENTS ADD COLUMN content_sha256 TEXT",
+  )?;
+
+  Ok(())
+}
+
+fn ensure_default_office_profile(conn: &Connection) -> AppResult<()> {
+  if !table_exists(conn, "OFFICE_PROFILE")? {
+    return Ok(());
+  }
+  let existing: Option<String> = conn
+    .query_row(
+      "SELECT id FROM OFFICE_PROFILE WHERE id = 'default'",
+      [],
+      |row| row.get(0),
+    )
+    .optional()?;
+  if existing.is_none() {
+    let now = now_iso();
+    conn.execute(
+      "INSERT INTO OFFICE_PROFILE
+       (id, office_name, office_address, office_email, office_phone, logo_data_url,
+        default_lawyer_id, created_at, updated_at)
+       VALUES ('default', '', '', '', '', '', NULL, ?1, ?2)",
+      params![now, now],
+    )?;
+  }
   Ok(())
 }
 
@@ -1051,28 +1221,78 @@ fn require_active_session(conn: &Connection, session_id: &str) -> AppResult<Sess
   Ok(session)
 }
 
-fn fetch_user_signature_info(
-  conn: &Connection,
-  user_id: &str,
-) -> AppResult<(String, Option<String>, Option<String>)> {
+fn fetch_office_profile(conn: &Connection) -> AppResult<OfficeProfile> {
   let mut stmt = conn.prepare(
-    "SELECT name, oab_number, oab_uf FROM USERS WHERE id = ?1",
+    "SELECT id, office_name, office_address, office_email, office_phone,
+            logo_data_url, default_lawyer_id, created_at, updated_at
+     FROM OFFICE_PROFILE WHERE id = 'default'",
   )?;
-  let row = stmt.query_row(params![user_id], |row| {
-    Ok((
-      row.get::<_, String>(0)?,
-      row.get::<_, Option<String>>(1)?,
-      row.get::<_, Option<String>>(2)?,
-    ))
-  });
-  let (name, oab_number, oab_uf) = match row {
-    Ok(row) => row,
-    Err(rusqlite::Error::QueryReturnedNoRows) => {
-      return Err(AppError::new("not_found", "Usuário não encontrado."))
+  let profile = stmt
+    .query_row([], |row| {
+      Ok(OfficeProfile {
+        id: row.get(0)?,
+        office_name: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
+        office_address: row.get::<_, Option<String>>(2)?.unwrap_or_default(),
+        office_email: row.get::<_, Option<String>>(3)?.unwrap_or_default(),
+        office_phone: row.get::<_, Option<String>>(4)?.unwrap_or_default(),
+        logo_data_url: row.get::<_, Option<String>>(5)?.unwrap_or_default(),
+        default_lawyer_id: row.get(6)?,
+        created_at: row.get(7)?,
+        updated_at: row.get(8)?,
+      })
+    })
+    .optional()?;
+
+  match profile {
+    Some(profile) => Ok(profile),
+    None => {
+      ensure_default_office_profile(conn)?;
+      fetch_office_profile(conn)
     }
-    Err(err) => return Err(err.into()),
+  }
+}
+
+fn resolve_office_info(
+  payload: &DocumentGeneratePayload,
+  office_profile: &OfficeProfile,
+) -> DocumentOfficeInfo {
+  let payload_name = payload
+    .office_name
+    .as_deref()
+    .map(str::trim)
+    .filter(|value| !value.is_empty())
+    .map(str::to_string);
+  let name = payload_name.unwrap_or_else(|| office_profile.office_name.clone());
+  let resolved_name = if name.trim().is_empty() {
+    "Escritório".to_string()
+  } else {
+    name
   };
-  Ok((name, oab_number, oab_uf))
+
+  DocumentOfficeInfo {
+    name: resolved_name,
+    address: office_profile.office_address.clone(),
+    email: office_profile.office_email.clone(),
+    phone: office_profile.office_phone.clone(),
+    logo_data_url: normalize_optional_field(Some(office_profile.logo_data_url.clone())),
+  }
+}
+
+fn sanitize_filename(input: &str) -> String {
+  let mut sanitized = String::with_capacity(input.len());
+  for ch in input.chars() {
+    if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.') {
+      sanitized.push(ch);
+    } else if ch.is_whitespace() {
+      sanitized.push('_');
+    }
+  }
+  let trimmed = sanitized.trim_matches('_').to_string();
+  if trimmed.is_empty() {
+    "documento".to_string()
+  } else {
+    trimmed
+  }
 }
 
 fn require_admin_session(conn: &Connection, session_id: &str) -> AppResult<UserInfo> {
@@ -1194,6 +1414,34 @@ fn validate_client_payload(payload: &ClientPayload) -> AppResult<(ClientType, St
     normalize_optional_text(payload.email.clone()),
     normalize_optional_text(payload.phone.clone()),
     normalize_optional_text(payload.notes.clone()),
+  ))
+}
+
+fn validate_lawyer_payload(
+  payload: &LawyerPayload,
+) -> AppResult<(String, String, String, Option<String>, Option<String>, Option<String>)> {
+  let name = payload.name.trim().to_string();
+  if name.is_empty() {
+    return Err(AppError::new("validation_failed", "Nome é obrigatório."));
+  }
+
+  let oab = payload.oab.trim().to_string();
+  if oab.is_empty() {
+    return Err(AppError::new("validation_failed", "OAB é obrigatória."));
+  }
+
+  let oab_uf = payload.oab_uf.trim().to_string();
+  if oab_uf.is_empty() {
+    return Err(AppError::new("validation_failed", "UF da OAB é obrigatória."));
+  }
+
+  Ok((
+    name,
+    oab,
+    oab_uf,
+    normalize_optional_text(payload.email.clone()),
+    normalize_optional_text(payload.phone.clone()),
+    normalize_optional_text(payload.address.clone()),
   ))
 }
 
@@ -2537,6 +2785,160 @@ fn clients_archive(
 }
 
 #[tauri::command]
+fn lawyers_list(
+  app: AppHandle,
+  state: State<'_, AppState>,
+  session_id: String,
+) -> AppResult<Vec<LawyerSummary>> {
+  let path = db_path(&app, &state)?;
+  let conn = open_connection(&path)?;
+  run_migrations(&conn)?;
+  require_active_session(&conn, &session_id)?;
+
+  let mut stmt = conn.prepare(
+    "SELECT id, name, oab, oab_uf FROM LAWYERS ORDER BY name ASC",
+  )?;
+  let rows = stmt.query_map([], |row| {
+    Ok(LawyerSummary {
+      id: row.get(0)?,
+      name: row.get(1)?,
+      oab: row.get(2)?,
+      oab_uf: row.get(3)?,
+    })
+  })?;
+
+  let mut lawyers = Vec::new();
+  for row in rows {
+    lawyers.push(row?);
+  }
+
+  Ok(lawyers)
+}
+
+#[tauri::command]
+fn lawyers_create(
+  app: AppHandle,
+  state: State<'_, AppState>,
+  session_id: String,
+  payload: LawyerPayload,
+) -> AppResult<LawyerDetail> {
+  let path = db_path(&app, &state)?;
+  let conn = open_connection(&path)?;
+  run_migrations(&conn)?;
+  let user = require_active_session(&conn, &session_id)?;
+
+  let (name, oab, oab_uf, email, phone, address) = validate_lawyer_payload(&payload)?;
+  let now = now_iso();
+  let id = Uuid::new_v4().to_string();
+
+  conn.execute(
+    "INSERT INTO LAWYERS
+     (id, name, oab, oab_uf, email, phone, address, created_at, updated_at)
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+    params![id, name, oab, oab_uf, email, phone, address, now, now],
+  )?;
+
+  insert_audit_log(
+    &conn,
+    &user.user_id,
+    "create_lawyer",
+    Some("LAWYER"),
+    Some(&id),
+    Some("Advogado criado"),
+    None,
+  )?;
+
+  Ok(LawyerDetail {
+    id,
+    name,
+    oab,
+    oab_uf,
+    email,
+    phone,
+    address,
+    created_at: now.clone(),
+    updated_at: now,
+  })
+}
+
+#[tauri::command]
+fn office_get(
+  app: AppHandle,
+  state: State<'_, AppState>,
+  session_id: String,
+) -> AppResult<OfficeProfile> {
+  let path = db_path(&app, &state)?;
+  let conn = open_connection(&path)?;
+  run_migrations(&conn)?;
+  require_active_session(&conn, &session_id)?;
+
+  fetch_office_profile(&conn)
+}
+
+#[tauri::command]
+fn office_update(
+  app: AppHandle,
+  state: State<'_, AppState>,
+  session_id: String,
+  payload: OfficeProfilePayload,
+) -> AppResult<OfficeProfile> {
+  let path = db_path(&app, &state)?;
+  let conn = open_connection(&path)?;
+  run_migrations(&conn)?;
+  let user = require_active_session(&conn, &session_id)?;
+  let mut profile = fetch_office_profile(&conn)?;
+
+  if let Some(office_name) = payload.office_name {
+    profile.office_name = office_name.trim().to_string();
+  }
+  if let Some(office_address) = payload.office_address {
+    profile.office_address = office_address.trim().to_string();
+  }
+  if let Some(office_email) = payload.office_email {
+    profile.office_email = office_email.trim().to_string();
+  }
+  if let Some(office_phone) = payload.office_phone {
+    profile.office_phone = office_phone.trim().to_string();
+  }
+  if let Some(logo_data_url) = payload.logo_data_url {
+    profile.logo_data_url = logo_data_url.trim().to_string();
+  }
+  if let Some(default_lawyer_id) = payload.default_lawyer_id {
+    profile.default_lawyer_id = normalize_optional_field(Some(default_lawyer_id));
+  }
+
+  let now = now_iso();
+  conn.execute(
+    "UPDATE OFFICE_PROFILE
+     SET office_name = ?1, office_address = ?2, office_email = ?3, office_phone = ?4,
+         logo_data_url = ?5, default_lawyer_id = ?6, updated_at = ?7
+     WHERE id = 'default'",
+    params![
+      profile.office_name,
+      profile.office_address,
+      profile.office_email,
+      profile.office_phone,
+      profile.logo_data_url,
+      profile.default_lawyer_id,
+      now
+    ],
+  )?;
+
+  insert_audit_log(
+    &conn,
+    &user.user_id,
+    "update_office_profile",
+    Some("OFFICE_PROFILE"),
+    Some("default"),
+    Some("Perfil do escritório atualizado"),
+    None,
+  )?;
+
+  profile.updated_at = now;
+  Ok(profile)
+}
+
+#[tauri::command]
 fn documents_generate_html(
   app: AppHandle,
   state: State<'_, AppState>,
@@ -2547,56 +2949,9 @@ fn documents_generate_html(
   let conn = open_connection(&path)?;
   run_migrations(&conn)?;
   let user = require_active_session(&conn, &session_id)?;
-  let (user_name, oab_number, oab_uf) = fetch_user_signature_info(&conn, &user.user_id)?;
-  let (signature_name, signature_oab) = resolve_signature_identity(user_name, oab_number, oab_uf);
-  let created_at = now_iso();
-  let document_id = Uuid::new_v4().to_string();
-  let signature_id = Uuid::new_v4().to_string();
-
-  let html_base = build_abnt_html(&payload);
-
-  let document_type = payload.document_type.as_str();
-  let signature_block_for_hash = build_signature_block(
-    &signature_name,
-    &signature_oab,
-    &payload.office_name,
-    &created_at,
-    None,
-  );
-  let signed_html_for_hash = inject_signature_block(&html_base, &signature_block_for_hash);
-  let normalized_html = normalize_html_for_hash(&signed_html_for_hash);
-  let document_hash = sha256_hex(normalized_html.as_bytes());
-  let content_hash = sha256_hex(normalize_html_for_hash(&html_base).as_bytes());
-  let signature_block = build_signature_block(
-    &signature_name,
-    &signature_oab,
-    &payload.office_name,
-    &created_at,
-    Some(&document_hash),
-  );
-  let signed_html = inject_signature_block(&html_base, &signature_block);
-
-  conn.execute(
-    "INSERT INTO DOCUMENT_SIGNATURES
-     (id, document_id, document_type, client_id, office_name, authored_by_user_id, authored_by_user_name,
-      authored_by_oab, created_at, content_hash, document_hash, signature_block, signed_html)
-     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
-    params![
-      signature_id,
-      document_id,
-      document_type,
-      payload.client_id,
-      payload.office_name,
-      user.user_id,
-      signature_name,
-      signature_oab,
-      created_at,
-      content_hash,
-      document_hash,
-      signature_block,
-      signed_html
-    ],
-  )?;
+  let office_profile = fetch_office_profile(&conn)?;
+  let office_info = resolve_office_info(&payload, &office_profile);
+  let html = build_abnt_html(&payload, &office_info);
 
   insert_audit_log(
     &conn,
@@ -2607,22 +2962,14 @@ fn documents_generate_html(
     Some("HTML gerado para documento"),
     Some(
       &json!({
-        "documentId": document_id,
-        "documentHash": document_hash
+        "documentType": payload.document_type.as_str(),
+        "clientId": payload.client_id
       })
       .to_string(),
     ),
   )?;
 
-  Ok(DocumentHtmlResponse {
-    html: signed_html,
-    document_id,
-    document_hash,
-    content_hash,
-    created_at,
-    authored_by_name: signature_name,
-    authored_by_oab: Some(signature_oab),
-  })
+  Ok(DocumentHtmlResponse { html })
 }
 
 #[tauri::command]
@@ -2636,83 +2983,55 @@ fn documents_export_html(
   let conn = open_connection(&path)?;
   run_migrations(&conn)?;
   let user = require_active_session(&conn, &session_id)?;
-  let now = now_iso();
 
   let mut stmt = conn.prepare(
-    "SELECT signed_html FROM DOCUMENT_SIGNATURES WHERE document_id = ?1",
+    "SELECT document_type, title, COALESCE(html_preview, content_html), status
+     FROM DOCUMENTS WHERE id = ?1",
   )?;
-  let signed_html = stmt
-    .query_row(params![payload.document_id], |row| row.get::<_, String>(0))
-    .map_err(|_| AppError::new("not_found", "Documento não encontrado."))?;
+  let document_row = stmt
+    .query_row(params![payload.document_id], |row| {
+      Ok((
+        row.get::<_, String>(0)?,
+        row.get::<_, String>(1)?,
+        row.get::<_, Option<String>>(2)?,
+        row.get::<_, String>(3)?,
+      ))
+    })
+    .optional()?;
 
-  fs::write(&payload.file_path, signed_html)?;
+  let (document_type, title, html_preview, status) = match document_row {
+    Some(row) => row,
+    None => return Err(AppError::new("not_found", "Documento não encontrado.")),
+  };
 
-  conn.execute(
-    "UPDATE DOCUMENT_SIGNATURES SET exported_path = ?1, exported_at = ?2 WHERE document_id = ?3",
-    params![payload.file_path, now, payload.document_id],
-  )?;
+  if status != "SIGNED" {
+    return Err(AppError::new(
+      "invalid_state",
+      "Documento precisa estar assinado antes da exportação.",
+    ));
+  }
+
+  let html = html_preview.ok_or_else(|| AppError::new("invalid_state", "Documento sem HTML."))?;
+  let safe_title = sanitize_filename(&title);
+  let filename = format!("{}_{}.html", document_type, safe_title);
 
   insert_audit_log(
     &conn,
     &user.user_id,
     "export_document_html",
     Some("DOCUMENT"),
-    payload.appointment_id.as_deref(),
+    Some(&payload.document_id),
     Some("Documento exportado"),
     Some(
       &json!({
         "documentId": payload.document_id,
-        "filePath": payload.file_path
+        "filename": filename
       })
       .to_string(),
     ),
   )?;
 
-  Ok(DocumentExportHtmlResponse {
-    file_path: payload.file_path,
-  })
-}
-
-#[tauri::command]
-fn documents_log_export(
-  app: AppHandle,
-  state: State<'_, AppState>,
-  session_id: String,
-  payload: DocumentLogExportPayload,
-) -> AppResult<()> {
-  let path = db_path(&app, &state)?;
-  let conn = open_connection(&path)?;
-  run_migrations(&conn)?;
-  let user = require_active_session(&conn, &session_id)?;
-  let now = now_iso();
-
-  let updated = conn.execute(
-    "UPDATE DOCUMENT_SIGNATURES
-     SET exported_at = COALESCE(exported_at, ?1)
-     WHERE document_id = ?2",
-    params![now, payload.document_id],
-  )?;
-  if updated == 0 {
-    return Err(AppError::new("not_found", "Documento não encontrado."));
-  }
-
-  insert_audit_log(
-    &conn,
-    &user.user_id,
-    "log_document_export",
-    Some("DOCUMENT"),
-    payload.appointment_id.as_deref(),
-    Some("Exportação registrada"),
-    Some(
-      &json!({
-        "documentId": payload.document_id,
-        "format": payload.format
-      })
-      .to_string(),
-    ),
-  )?;
-
-  Ok(())
+  Ok(DocumentExportHtmlResponse { filename, html })
 }
 
 #[tauri::command]
@@ -2720,27 +3039,53 @@ fn documents_create_draft(
   app: AppHandle,
   state: State<'_, AppState>,
   session_id: String,
-  payload: DocumentGeneratePayload,
-) -> AppResult<DocumentDraftResponse> {
+  payload: DocumentDraftPayload,
+) -> AppResult<DocumentDetail> {
   let path = db_path(&app, &state)?;
   let conn = open_connection(&path)?;
   run_migrations(&conn)?;
   let user = require_active_session(&conn, &session_id)?;
   let now = now_iso();
   let document_id = Uuid::new_v4().to_string();
-  let html = build_abnt_html(&payload);
   let status = "DRAFT";
+  let title = payload.title.trim().to_string();
+  if title.is_empty() {
+    return Err(AppError::new(
+      "validation_error",
+      "Título do documento é obrigatório.",
+    ));
+  }
+  if payload.html_preview.trim().is_empty() {
+    return Err(AppError::new(
+      "validation_error",
+      "HTML de pré-visualização é obrigatório.",
+    ));
+  }
+  if payload.payload_json.trim().is_empty() {
+    return Err(AppError::new(
+      "validation_error",
+      "Payload do documento é obrigatório.",
+    ));
+  }
+  let payload_value: DocumentGeneratePayload =
+    serde_json::from_str(&payload.payload_json).map_err(|_| {
+      AppError::new("payload_invalid", "Payload do documento inválido.")
+    })?;
 
   conn.execute(
     "INSERT INTO DOCUMENTS
-      (id, document_type, client_id, title, content_html, status, created_at, updated_at)
-     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+      (id, document_type, client_id, case_id, title, payload_json, html_preview, content_html,
+       status, created_at, updated_at)
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
     params![
       document_id,
-      payload.document_type.as_str(),
+      payload_value.document_type.as_str(),
       payload.client_id,
-      payload.title,
-      html,
+      payload.case_id,
+      title,
+      payload.payload_json,
+      payload.html_preview,
+      payload.html_preview,
       status,
       now,
       now
@@ -2757,17 +3102,27 @@ fn documents_create_draft(
     Some(
       &json!({
         "documentId": document_id,
-        "documentType": payload.document_type.as_str(),
-        "appointmentId": payload.appointment_id
+        "documentType": payload_value.document_type.as_str()
       })
       .to_string(),
     ),
   )?;
 
-  Ok(DocumentDraftResponse {
-    document_id,
-    html,
+  Ok(DocumentDetail {
+    id: document_id,
+    document_type: payload_value.document_type,
+    client_id: payload.client_id,
+    case_id: payload.case_id,
+    title,
+    payload_json: payload.payload_json,
+    html_preview: payload.html_preview,
+    content_sha256: None,
+    signed_by_lawyer_id: None,
+    signed_by_label: None,
+    signed_at: None,
     status: status.to_string(),
+    created_at: now.clone(),
+    updated_at: now,
   })
 }
 
@@ -2777,73 +3132,131 @@ fn documents_sign(
   state: State<'_, AppState>,
   session_id: String,
   document_id: String,
-  lawyer_name: String,
-  lawyer_oab: String,
-) -> AppResult<DocumentSignResponse> {
+  lawyer_id: String,
+) -> AppResult<DocumentDetail> {
   let path = db_path(&app, &state)?;
   let conn = open_connection(&path)?;
   run_migrations(&conn)?;
   let user = require_active_session(&conn, &session_id)?;
 
-  let trimmed_name = lawyer_name.trim();
-  let trimmed_oab = lawyer_oab.trim();
-  if trimmed_name.is_empty() || trimmed_oab.is_empty() {
-    return Err(AppError::new(
-      "validation_error",
-      "Nome e OAB do advogado são obrigatórios.",
-    ));
-  }
-
   let mut stmt = conn.prepare(
-    "SELECT content_html, status, hash_html FROM DOCUMENTS WHERE id = ?1",
+    "SELECT document_type, client_id, case_id, title, payload_json,
+            COALESCE(html_preview, content_html),
+            status, content_sha256, signed_by_lawyer_id, signed_by_label, signed_at,
+            created_at, updated_at
+     FROM DOCUMENTS WHERE id = ?1",
   )?;
   let document_row = stmt
     .query_row(params![document_id], |row| {
-      Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, Option<String>>(2)?))
+      Ok((
+        row.get::<_, String>(0)?,
+        row.get::<_, Option<String>>(1)?,
+        row.get::<_, Option<String>>(2)?,
+        row.get::<_, String>(3)?,
+        row.get::<_, Option<String>>(4)?,
+        row.get::<_, Option<String>>(5)?,
+        row.get::<_, String>(6)?,
+        row.get::<_, Option<String>>(7)?,
+        row.get::<_, Option<String>>(8)?,
+        row.get::<_, Option<String>>(9)?,
+        row.get::<_, Option<String>>(10)?,
+        row.get::<_, String>(11)?,
+        row.get::<_, String>(12)?,
+      ))
     })
     .optional()?;
 
-  let (content_html, current_status, existing_hash) = match document_row {
+  let (
+    document_type,
+    client_id,
+    case_id,
+    title,
+    payload_json,
+    html_preview,
+    status,
+    content_sha256,
+    signed_by_lawyer_id,
+    signed_by_label,
+    signed_at,
+    created_at,
+    updated_at,
+  ) = match document_row {
     Some(values) => values,
     None => return Err(AppError::new("not_found", "Documento não encontrado.")),
   };
 
-  if current_status != "DRAFT" {
-    let hash_html = existing_hash.ok_or_else(|| {
-      AppError::new("document_unsigned", "Documento já foi assinado.")
-    })?;
-    return Ok(DocumentSignResponse {
-      document_id,
-      html_signed: content_html,
-      hash_html,
-      status: current_status,
+  if status != "DRAFT" {
+    return Ok(DocumentDetail {
+      id: document_id,
+      document_type: parse_document_type(document_type)?,
+      client_id,
+      case_id,
+      title,
+      payload_json: payload_json.unwrap_or_default(),
+      html_preview: html_preview.unwrap_or_default(),
+      content_sha256,
+      signed_by_lawyer_id,
+      signed_by_label,
+      signed_at,
+      status,
+      created_at,
+      updated_at,
     });
   }
 
+  let mut stmt = conn.prepare(
+    "SELECT name, oab, oab_uf FROM LAWYERS WHERE id = ?1",
+  )?;
+  let lawyer_row = stmt
+    .query_row(params![lawyer_id], |row| {
+      Ok((
+        row.get::<_, String>(0)?,
+        row.get::<_, String>(1)?,
+        row.get::<_, String>(2)?,
+      ))
+    })
+    .optional()?;
+  let (lawyer_name, lawyer_oab, lawyer_oab_uf) = match lawyer_row {
+    Some(values) => values,
+    None => return Err(AppError::new("not_found", "Advogado não encontrado.")),
+  };
+  let signed_label = format!(
+    "Assinado por: {} (OAB/{} {})",
+    lawyer_name.trim(),
+    lawyer_oab_uf.trim(),
+    lawyer_oab.trim()
+  );
+
+  let base_html = html_preview.unwrap_or_default();
+  if base_html.trim().is_empty() {
+    return Err(AppError::new("invalid_state", "Documento sem HTML."));
+  }
+
+  let signed_at_value = now_iso();
   let signature_block_for_hash =
-    build_document_signature_block(trimmed_name, trimmed_oab, None);
-  let signed_html_for_hash = inject_signature_block(&content_html, &signature_block_for_hash);
+    build_document_signature_block(&signed_label, &signed_at_value, None);
+  let signed_html_for_hash = inject_signature_block(&base_html, &signature_block_for_hash);
   let normalized_html = normalize_html_for_hash(&signed_html_for_hash);
   let hash_html = sha256_hex(normalized_html.as_bytes());
   let signature_block =
-    build_document_signature_block(trimmed_name, trimmed_oab, Some(&hash_html));
-  let signed_html = inject_signature_block(&content_html, &signature_block);
-  let now = now_iso();
-  let status = "SIGNED";
+    build_document_signature_block(&signed_label, &signed_at_value, Some(&hash_html));
+  let signed_html = inject_signature_block(&base_html, &signature_block);
+  let status_value = "SIGNED";
 
   conn.execute(
     "UPDATE DOCUMENTS
-     SET content_html = ?1, hash_html = ?2, lawyer_name = ?3, lawyer_oab = ?4,
-         signed_at = ?5, status = ?6, updated_at = ?7
-     WHERE id = ?8",
+     SET html_preview = ?1, content_html = ?2, content_sha256 = ?3, signed_by_lawyer_id = ?4,
+         signed_by_label = ?5, signed_at = ?6, status = ?7, updated_at = ?8
+     WHERE id = ?9",
     params![
       signed_html,
+      signed_html,
       hash_html,
-      trimmed_name,
-      trimmed_oab,
-      now,
-      status,
-      now,
+      lawyer_id,
+      signed_label,
+      signed_at_value,
+      status_value,
+      signed_at_value,
       document_id
     ],
   )?;
@@ -2864,85 +3277,21 @@ fn documents_sign(
     ),
   )?;
 
-  Ok(DocumentSignResponse {
-    document_id,
-    html_signed: signed_html,
-    hash_html,
-    status: status.to_string(),
-  })
-}
-
-#[tauri::command]
-fn documents_export_pdf(
-  app: AppHandle,
-  state: State<'_, AppState>,
-  session_id: String,
-  document_id: String,
-) -> AppResult<DocumentExportPdfResponse> {
-  let path = db_path(&app, &state)?;
-  let conn = open_connection(&path)?;
-  run_migrations(&conn)?;
-  let user = require_active_session(&conn, &session_id)?;
-
-  let mut stmt = conn.prepare(
-    "SELECT document_type, content_html, status FROM DOCUMENTS WHERE id = ?1",
-  )?;
-  let document_row = stmt
-    .query_row(params![document_id], |row| {
-      Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?))
-    })
-    .optional()?;
-
-  let (document_type, content_html, status) = match document_row {
-    Some(values) => values,
-    None => return Err(AppError::new("not_found", "Documento não encontrado.")),
-  };
-
-  if status == "DRAFT" {
-    return Err(AppError::new(
-      "document_not_signed",
-      "Documento precisa ser assinado antes da exportação.",
-    ));
-  }
-
-  let base_dir = documents_base_dir(&app)?;
-  let file_name = format!("{}_{}.pdf", document_type, document_id);
-  let output_path = base_dir.join(file_name);
-  export_html_to_pdf(&content_html, &output_path)?;
-  let hash_pdf = sha256_file(&output_path)?;
-  let now = now_iso();
-  let status = "EXPORTED";
-  let output_path_string = output_path.to_string_lossy().to_string();
-
-  conn.execute(
-    "UPDATE DOCUMENTS
-     SET file_path = ?1, hash_pdf = ?2, status = ?3, updated_at = ?4
-     WHERE id = ?5",
-    params![output_path_string, hash_pdf, status, now, document_id],
-  )?;
-
-  insert_audit_log(
-    &conn,
-    &user.user_id,
-    "documento_exportado",
-    Some("DOCUMENT"),
-    Some(&document_id),
-    Some("Documento exportado"),
-    Some(
-      &json!({
-        "documentId": document_id,
-        "filePath": output_path_string,
-        "hashPdf": hash_pdf
-      })
-      .to_string(),
-    ),
-  )?;
-
-  Ok(DocumentExportPdfResponse {
-    document_id,
-    file_path: output_path_string,
-    hash_pdf,
-    status: status.to_string(),
+  Ok(DocumentDetail {
+    id: document_id,
+    document_type: parse_document_type(document_type)?,
+    client_id,
+    case_id,
+    title,
+    payload_json: payload_json.unwrap_or_default(),
+    html_preview: signed_html,
+    content_sha256: Some(hash_html),
+    signed_by_lawyer_id: Some(lawyer_id),
+    signed_by_label: Some(signed_label),
+    signed_at: Some(signed_at_value.clone()),
+    status: status_value.to_string(),
+    created_at,
+    updated_at: signed_at_value,
   })
 }
 
@@ -2959,8 +3308,10 @@ fn documents_get(
   require_active_session(&conn, &session_id)?;
 
   let mut stmt = conn.prepare(
-    "SELECT id, document_type, client_id, title, content_html, hash_html, lawyer_name, lawyer_oab,
-            signed_at, file_path, hash_pdf, status, created_at, updated_at
+    "SELECT id, document_type, client_id, case_id, title, payload_json,
+            COALESCE(html_preview, content_html),
+            content_sha256, signed_by_lawyer_id, signed_by_label, signed_at,
+            status, created_at, updated_at
      FROM DOCUMENTS WHERE id = ?1",
   )?;
   let document_row = stmt
@@ -2969,7 +3320,7 @@ fn documents_get(
         row.get::<_, String>(0)?,
         row.get::<_, String>(1)?,
         row.get::<_, Option<String>>(2)?,
-        row.get::<_, String>(3)?,
+        row.get::<_, Option<String>>(3)?,
         row.get::<_, String>(4)?,
         row.get::<_, Option<String>>(5)?,
         row.get::<_, Option<String>>(6)?,
@@ -2988,14 +3339,14 @@ fn documents_get(
     id,
     document_type,
     client_id,
+    case_id,
     title,
-    content_html,
-    hash_html,
-    lawyer_name,
-    lawyer_oab,
+    payload_json,
+    html_preview,
+    content_sha256,
+    signed_by_lawyer_id,
+    signed_by_label,
     signed_at,
-    file_path,
-    hash_pdf,
     status,
     created_at,
     updated_at,
@@ -3005,14 +3356,14 @@ fn documents_get(
     id,
     document_type: parse_document_type(document_type)?,
     client_id,
+    case_id,
     title,
-    content_html,
-    hash_html,
-    lawyer_name,
-    lawyer_oab,
+    payload_json: payload_json.unwrap_or_default(),
+    html_preview: html_preview.unwrap_or_default(),
+    content_sha256,
+    signed_by_lawyer_id,
+    signed_by_label,
     signed_at,
-    file_path,
-    hash_pdf,
     status,
     created_at,
     updated_at,
@@ -3032,7 +3383,7 @@ fn documents_list(
   require_active_session(&conn, &session_id)?;
 
   let mut sql = String::from(
-    "SELECT id, document_type, client_id, title, status, created_at, updated_at, hash_html, hash_pdf \
+    "SELECT id, document_type, client_id, title, status, created_at, updated_at, content_sha256 \
      FROM DOCUMENTS WHERE 1=1",
   );
   let mut params: Vec<String> = Vec::new();
@@ -3052,7 +3403,7 @@ fn documents_list(
     params.push(client_id);
   }
 
-  sql.push_str(" ORDER BY created_at DESC");
+  sql.push_str(" ORDER BY updated_at DESC");
 
   let mut stmt = conn.prepare(&sql)?;
   let rows = stmt.query_map(params_from_iter(params.iter()), |row| {
@@ -3065,7 +3416,6 @@ fn documents_list(
       row.get::<_, String>(5)?,
       row.get::<_, String>(6)?,
       row.get::<_, Option<String>>(7)?,
-      row.get::<_, Option<String>>(8)?,
     ))
   })?;
 
@@ -3079,8 +3429,7 @@ fn documents_list(
       status,
       created_at,
       updated_at,
-      hash_html,
-      hash_pdf,
+      content_sha256,
     ) = row?;
     documents.push(DocumentSummary {
       id,
@@ -3090,8 +3439,7 @@ fn documents_list(
       status,
       created_at,
       updated_at,
-      hash_html,
-      hash_pdf,
+      content_sha256,
     });
   }
 
@@ -3328,12 +3676,14 @@ fn main() {
       clients_create,
       clients_update,
       clients_archive,
+      lawyers_list,
+      lawyers_create,
+      office_get,
+      office_update,
       documents_generate_html,
       documents_export_html,
-      documents_log_export,
       documents_create_draft,
       documents_sign,
-      documents_export_pdf,
       documents_get,
       documents_list,
       attendances_list,

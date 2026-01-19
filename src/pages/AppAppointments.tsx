@@ -21,6 +21,8 @@ import {
   TextField,
   Typography
 } from '@mui/material';
+import { save } from '@tauri-apps/api/dialog';
+import { writeTextFile } from '@tauri-apps/api/fs';
 
 import { attendancesCreate, attendancesDelete, attendancesList, attendancesUpdate } from '../api/attendances';
 import type {
@@ -31,11 +33,22 @@ import type {
 import { clientsList, type ClientSummary } from '../api/clients';
 import {
   documentsCreateDraft,
-  documentsExportPdf,
+  documentsExportHtml,
+  documentsGenerateHtml,
+  documentsGet,
+  documentsList,
   documentsSign
 } from '../api/documents';
-import type { DocumentStatus, DocumentType } from '../api/documents';
+import type {
+  DocumentDetail,
+  DocumentGeneratePayload,
+  DocumentStatus,
+  DocumentSummary,
+  DocumentType
+} from '../api/documents';
 import { getErrorMessage } from '../api/errors';
+import { lawyersList, type LawyerSummary } from '../api/lawyers';
+import { officeGet, type OfficeProfile } from '../api/office';
 import { t } from '../i18n';
 import { useAuth } from '../state/auth';
 
@@ -57,8 +70,7 @@ type DocumentFormState = {
   attendanceDate: string;
   documentType: DocumentType;
   officeName: string;
-  lawyerName: string;
-  lawyerOab: string;
+  lawyerId: string;
   title: string;
   history: string;
   analysis: string;
@@ -66,12 +78,12 @@ type DocumentFormState = {
 };
 
 type DocumentPreviewState = {
-  documentId: string;
+  documentId?: string;
   html: string;
-  status: DocumentStatus;
-  hashHtml?: string | null;
-  hashPdf?: string | null;
-  filePath?: string | null;
+  status: DocumentStatus | 'PREVIEW';
+  contentSha256?: string | null;
+  signedByLabel?: string | null;
+  signedAt?: string | null;
 };
 
 const channelOptions: AttendanceChannel[] = [
@@ -112,14 +124,19 @@ const toIsoFromLocal = (value: string) => {
 };
 
 const AppAppointments = () => {
-  const { sessionId, user } = useAuth();
+  const { sessionId } = useAuth();
   const [clients, setClients] = useState<ClientSummary[]>([]);
   const [selectedClientId, setSelectedClientId] = useState('');
   const [attendances, setAttendances] = useState<AttendanceSummary[]>([]);
+  const [lawyers, setLawyers] = useState<LawyerSummary[]>([]);
+  const [officeProfile, setOfficeProfile] = useState<OfficeProfile | null>(null);
+  const [recentDocuments, setRecentDocuments] = useState<DocumentSummary[]>([]);
   const [isClientsLoading, setIsClientsLoading] = useState(false);
   const [isAttendancesLoading, setIsAttendancesLoading] = useState(false);
+  const [isDocumentsLoading, setIsDocumentsLoading] = useState(false);
   const [clientsError, setClientsError] = useState<string | null>(null);
   const [attendanceError, setAttendanceError] = useState<string | null>(null);
+  const [documentsError, setDocumentsError] = useState<string | null>(null);
   const [toast, setToast] = useState<ToastState>(null);
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [formMode, setFormMode] = useState<'create' | 'edit'>('create');
@@ -174,9 +191,46 @@ const AppAppointments = () => {
     }
   };
 
+  const loadLawyers = async () => {
+    if (!sessionId) return;
+    try {
+      const data = await lawyersList(sessionId);
+      setLawyers(data);
+    } catch (err) {
+      setToast({ message: getErrorMessage(err, 'Falha ao carregar advogados.'), severity: 'error' });
+    }
+  };
+
+  const loadOfficeProfile = async () => {
+    if (!sessionId) return;
+    try {
+      const profile = await officeGet(sessionId);
+      setOfficeProfile(profile);
+    } catch (err) {
+      setToast({ message: getErrorMessage(err, 'Falha ao carregar perfil do escritório.'), severity: 'error' });
+    }
+  };
+
+  const loadRecentDocuments = async () => {
+    if (!sessionId) return;
+    setIsDocumentsLoading(true);
+    setDocumentsError(null);
+    try {
+      const data = await documentsList(sessionId);
+      setRecentDocuments(data.slice(0, 5));
+    } catch (err) {
+      setDocumentsError(getErrorMessage(err, 'Falha ao carregar documentos recentes.'));
+    } finally {
+      setIsDocumentsLoading(false);
+    }
+  };
+
   useEffect(() => {
     if (canFetch) {
       void loadClients();
+      void loadLawyers();
+      void loadOfficeProfile();
+      void loadRecentDocuments();
     }
   }, [canFetch]);
 
@@ -220,14 +274,13 @@ const AppAppointments = () => {
       setToast({ message: 'Selecione um cliente antes de gerar documento.', severity: 'warning' });
       return;
     }
-    const lawyerOab = user?.oabNumber && user?.oabUf ? `${user.oabUf} ${user.oabNumber}` : '';
+    const defaultLawyerId = officeProfile?.defaultLawyerId ?? lawyers[0]?.id ?? '';
     setDocumentForm({
       attendanceId: attendance.id,
       attendanceDate: formatDateTime(attendance.occurredAt),
       documentType: 'RELATORIO',
-      officeName: '',
-      lawyerName: user?.name ?? '',
-      lawyerOab,
+      officeName: officeProfile?.officeName ?? '',
+      lawyerId: defaultLawyerId,
       title: attendance.subject,
       history: attendance.notes,
       analysis: '',
@@ -237,9 +290,41 @@ const AppAppointments = () => {
     setIsDocumentDialogOpen(true);
   };
 
+  const buildDocumentPayload = (): DocumentGeneratePayload | null => {
+    if (!documentForm || !selectedClient) return null;
+    const officeName = documentForm.officeName.trim();
+    return {
+      documentType: documentForm.documentType,
+      officeName: officeName.length > 0 ? officeName : undefined,
+      generatedAt: new Date().toLocaleString('pt-BR'),
+      clientId: selectedClient.id,
+      clientName: selectedClient.name,
+      clientDocument: selectedClient.cpfCnpj,
+      title: documentForm.title.trim(),
+      attendanceDate: documentForm.attendanceDate,
+      history: documentForm.history.trim(),
+      analysis: documentForm.analysis.trim(),
+      conclusion: documentForm.conclusion.trim(),
+      appointmentId: documentForm.attendanceId
+    };
+  };
+
+  const applyDocumentDetail = (detail: DocumentDetail) => {
+    setDocumentPreview({
+      documentId: detail.id,
+      html: detail.htmlPreview,
+      status: detail.status,
+      contentSha256: detail.contentSha256,
+      signedByLabel: detail.signedByLabel,
+      signedAt: detail.signedAt
+    });
+  };
+
   const handleGenerateDocument = async () => {
     if (!sessionId || !documentForm || !selectedClient) return;
-    if (!documentForm.officeName.trim()) {
+    const hasOfficeName = documentForm.officeName.trim().length > 0;
+    const hasOfficeProfileName = officeProfile?.officeName?.trim().length;
+    if (!hasOfficeName && !hasOfficeProfileName) {
       setToast({ message: 'Informe o nome do escritório.', severity: 'error' });
       return;
     }
@@ -247,28 +332,16 @@ const AppAppointments = () => {
       setToast({ message: 'Informe o título do documento.', severity: 'error' });
       return;
     }
+    const payload = buildDocumentPayload();
+    if (!payload) return;
     setIsDocumentGenerating(true);
     try {
-      const response = await documentsCreateDraft(sessionId, {
-        documentType: documentForm.documentType,
-        officeName: documentForm.officeName.trim(),
-        generatedAt: new Date().toLocaleString('pt-BR'),
-        clientId: selectedClient.id,
-        clientName: selectedClient.name,
-        clientDocument: selectedClient.cpfCnpj,
-        title: documentForm.title.trim(),
-        attendanceDate: documentForm.attendanceDate,
-        history: documentForm.history.trim(),
-        analysis: documentForm.analysis.trim(),
-        conclusion: documentForm.conclusion.trim(),
-        appointmentId: documentForm.attendanceId
-      });
+      const response = await documentsGenerateHtml(sessionId, payload);
       setDocumentPreview({
-        documentId: response.documentId,
         html: response.html,
-        status: response.status
+        status: 'PREVIEW'
       });
-      setToast({ message: 'Documento gerado em rascunho.', severity: 'success' });
+      setToast({ message: 'Preview gerado com sucesso.', severity: 'success' });
     } catch (err) {
       setToast({ message: getErrorMessage(err, t('appointments.toast.generateError')), severity: 'error' });
     } finally {
@@ -277,19 +350,49 @@ const AppAppointments = () => {
   };
 
   const handleCopyDocumentHash = () => {
-    if (!documentPreview?.hashHtml) return;
+    if (!documentPreview?.contentSha256) return;
     if (navigator.clipboard?.writeText) {
-      void navigator.clipboard.writeText(documentPreview.hashHtml);
+      void navigator.clipboard.writeText(documentPreview.contentSha256);
       setToast({ message: 'Hash copiado para a área de transferência.', severity: 'success' });
     } else {
       setToast({ message: 'Não foi possível copiar o hash.', severity: 'warning' });
     }
   };
 
+  const handleSaveDraft = async () => {
+    if (!sessionId || !documentForm || !documentPreview || !selectedClient) return;
+    if (documentPreview.status !== 'PREVIEW') {
+      setToast({ message: 'Gere o preview antes de salvar o rascunho.', severity: 'warning' });
+      return;
+    }
+    const payload = buildDocumentPayload();
+    if (!payload) return;
+    setIsDocumentGenerating(true);
+    try {
+      const response = await documentsCreateDraft(sessionId, {
+        payloadJson: JSON.stringify(payload),
+        htmlPreview: documentPreview.html,
+        title: payload.title,
+        clientId: payload.clientId
+      });
+      applyDocumentDetail(response);
+      setToast({ message: 'Documento salvo como rascunho.', severity: 'success' });
+      await loadRecentDocuments();
+    } catch (err) {
+      setToast({ message: 'Falha ao salvar rascunho.', severity: 'error' });
+    } finally {
+      setIsDocumentGenerating(false);
+    }
+  };
+
   const handleSignDocument = async () => {
     if (!sessionId || !documentPreview || !documentForm) return;
-    if (!documentForm.lawyerName.trim() || !documentForm.lawyerOab.trim()) {
-      setToast({ message: 'Informe o advogado responsável e a OAB.', severity: 'error' });
+    if (!documentPreview.documentId) {
+      setToast({ message: 'Salve o rascunho antes de assinar.', severity: 'warning' });
+      return;
+    }
+    if (!documentForm.lawyerId) {
+      setToast({ message: 'Selecione o advogado responsável.', severity: 'error' });
       return;
     }
     setIsDocumentSigning(true);
@@ -297,20 +400,11 @@ const AppAppointments = () => {
       const response = await documentsSign(
         sessionId,
         documentPreview.documentId,
-        documentForm.lawyerName.trim(),
-        documentForm.lawyerOab.trim()
+        documentForm.lawyerId
       );
-      setDocumentPreview((prev) =>
-        prev
-          ? {
-              ...prev,
-              html: response.htmlSigned,
-              hashHtml: response.hashHtml,
-              status: response.status
-            }
-          : prev
-      );
+      applyDocumentDetail(response);
       setToast({ message: 'Documento assinado com sucesso.', severity: 'success' });
+      await loadRecentDocuments();
     } catch (err) {
       setToast({ message: 'Falha ao assinar documento.', severity: 'error' });
     } finally {
@@ -322,22 +416,71 @@ const AppAppointments = () => {
     if (!sessionId || !documentPreview) return;
     setIsDocumentExporting(true);
     try {
-      const response = await documentsExportPdf(sessionId, documentPreview.documentId);
-      setDocumentPreview((prev) =>
-        prev
-          ? {
-              ...prev,
-              hashPdf: response.hashPdf,
-              filePath: response.filePath,
-              status: response.status
-            }
-          : prev
-      );
+      if (!documentPreview.documentId) {
+        setToast({ message: 'Salve e assine o documento antes de exportar.', severity: 'warning' });
+        return;
+      }
+      if (documentPreview.status !== 'SIGNED') {
+        setToast({ message: 'Documento precisa estar assinado para exportar.', severity: 'warning' });
+        return;
+      }
+      const response = await documentsExportHtml(sessionId, documentPreview.documentId);
+      const targetPath = await save({
+        defaultPath: response.filename,
+        filters: [{ name: 'HTML', extensions: ['html'] }]
+      });
+      if (!targetPath) {
+        setToast({ message: 'Exportação cancelada.', severity: 'info' });
+        return;
+      }
+      await writeTextFile(targetPath, response.html);
       setToast({ message: 'Documento exportado com sucesso.', severity: 'success' });
     } catch (err) {
       setToast({ message: 'Falha ao exportar documento.', severity: 'error' });
     } finally {
       setIsDocumentExporting(false);
+    }
+  };
+
+  const handleOpenRecentDocument = async (documentId: string) => {
+    if (!sessionId) return;
+    try {
+      const detail = await documentsGet(sessionId, documentId);
+      let payload: DocumentGeneratePayload | null = null;
+      try {
+        payload = JSON.parse(detail.payloadJson) as DocumentGeneratePayload;
+      } catch (error) {
+        payload = null;
+      }
+      if (payload) {
+        setDocumentForm({
+          attendanceId: payload.appointmentId ?? '',
+          attendanceDate: payload.attendanceDate,
+          documentType: payload.documentType,
+          officeName: payload.officeName ?? officeProfile?.officeName ?? '',
+          lawyerId: detail.signedByLawyerId ?? officeProfile?.defaultLawyerId ?? '',
+          title: payload.title,
+          history: payload.history,
+          analysis: payload.analysis,
+          conclusion: payload.conclusion
+        });
+      } else {
+        setDocumentForm({
+          attendanceId: '',
+          attendanceDate: '',
+          documentType: detail.documentType,
+          officeName: officeProfile?.officeName ?? '',
+          lawyerId: detail.signedByLawyerId ?? officeProfile?.defaultLawyerId ?? '',
+          title: detail.title,
+          history: '',
+          analysis: '',
+          conclusion: ''
+        });
+      }
+      applyDocumentDetail(detail);
+      setIsDocumentDialogOpen(true);
+    } catch (err) {
+      setToast({ message: 'Falha ao carregar documento.', severity: 'error' });
     }
   };
 
@@ -400,6 +543,14 @@ const AppAppointments = () => {
       });
     }
   };
+
+  const isPreviewReady = documentPreview?.status === 'PREVIEW';
+  const isDraftReady = documentPreview?.status === 'DRAFT';
+  const isSigned = documentPreview?.status === 'SIGNED';
+  const isSaveDraftDisabled = !documentPreview || !isPreviewReady || isDocumentGenerating;
+  const isSignDisabled =
+    !documentPreview || !isDraftReady || isDocumentSigning || !documentForm?.lawyerId;
+  const isExportDisabled = !documentPreview || !isSigned || isDocumentExporting;
 
   return (
     <Box>
@@ -486,6 +637,44 @@ const AppAppointments = () => {
             )}
           </TableBody>
         </Table>
+
+        <Stack spacing={1}>
+          <Typography variant="h6">Documentos recentes</Typography>
+          {documentsError && <Alert severity="error">{documentsError}</Alert>}
+          <Table size="small">
+            <TableHead>
+              <TableRow>
+                <TableCell>Título</TableCell>
+                <TableCell>Tipo</TableCell>
+                <TableCell>Status</TableCell>
+                <TableCell>Atualizado em</TableCell>
+                <TableCell align="right">Ações</TableCell>
+              </TableRow>
+            </TableHead>
+            <TableBody>
+              {recentDocuments.map((document) => (
+                <TableRow key={document.id} hover>
+                  <TableCell>{document.title}</TableCell>
+                  <TableCell>{document.documentType}</TableCell>
+                  <TableCell>{document.status}</TableCell>
+                  <TableCell>{formatDateTime(document.updatedAt)}</TableCell>
+                  <TableCell align="right">
+                    <Button size="small" variant="outlined" onClick={() => handleOpenRecentDocument(document.id)}>
+                      Abrir
+                    </Button>
+                  </TableCell>
+                </TableRow>
+              ))}
+              {!isDocumentsLoading && recentDocuments.length === 0 && (
+                <TableRow>
+                  <TableCell colSpan={5} align="center">
+                    Nenhum documento recente.
+                  </TableCell>
+                </TableRow>
+              )}
+            </TableBody>
+          </Table>
+        </Stack>
       </Stack>
 
       <Dialog open={isFormOpen} onClose={() => setIsFormOpen(false)} fullWidth maxWidth="sm">
@@ -594,26 +783,27 @@ const AppAppointments = () => {
                 }
                 fullWidth
               />
-              <TextField
-                label="Advogado responsável"
-                value={documentForm.lawyerName}
-                onChange={(event) =>
-                  setDocumentForm((prev) =>
-                    prev ? { ...prev, lawyerName: event.target.value } : prev
-                  )
-                }
-                fullWidth
-              />
-              <TextField
-                label="OAB"
-                value={documentForm.lawyerOab}
-                onChange={(event) =>
-                  setDocumentForm((prev) =>
-                    prev ? { ...prev, lawyerOab: event.target.value } : prev
-                  )
-                }
-                fullWidth
-              />
+              <FormControl fullWidth>
+                <InputLabel>Advogado responsável</InputLabel>
+                <Select
+                  label="Advogado responsável"
+                  value={documentForm.lawyerId}
+                  onChange={(event) =>
+                    setDocumentForm((prev) =>
+                      prev ? { ...prev, lawyerId: event.target.value } : prev
+                    )
+                  }
+                >
+                  {lawyers.map((lawyer) => (
+                    <MenuItem key={lawyer.id} value={lawyer.id}>
+                      {lawyer.name} · OAB/{lawyer.oabUf} {lawyer.oab}
+                    </MenuItem>
+                  ))}
+                </Select>
+              </FormControl>
+              {lawyers.length === 0 && (
+                <Alert severity="warning">Cadastre um advogado para assinatura.</Alert>
+              )}
               <TextField
                 label="Título"
                 value={documentForm.title}
@@ -670,27 +860,22 @@ const AppAppointments = () => {
               </Typography>
               <Stack spacing={1} mb={2}>
                 <Typography variant="body2">Status: {documentPreview.status}</Typography>
-                {documentPreview.hashHtml && (
+                {documentPreview.signedByLabel && (
+                  <Typography variant="body2">{documentPreview.signedByLabel}</Typography>
+                )}
+                {documentPreview.signedAt && (
+                  <Typography variant="body2">Data: {documentPreview.signedAt}</Typography>
+                )}
+                {documentPreview.contentSha256 && (
                   <Stack direction="row" spacing={1} alignItems="center">
-                    <Typography variant="body2">Hash SHA-256 (HTML):</Typography>
+                    <Typography variant="body2">Hash SHA-256 do conteúdo:</Typography>
                     <Typography variant="body2" sx={{ fontFamily: 'monospace' }}>
-                      {documentPreview.hashHtml}
+                      {documentPreview.contentSha256}
                     </Typography>
                     <Button size="small" onClick={handleCopyDocumentHash}>
                       Copiar
                     </Button>
                   </Stack>
-                )}
-                {documentPreview.hashPdf && (
-                  <Stack direction="row" spacing={1} alignItems="center">
-                    <Typography variant="body2">Hash SHA-256 (PDF):</Typography>
-                    <Typography variant="body2" sx={{ fontFamily: 'monospace' }}>
-                      {documentPreview.hashPdf}
-                    </Typography>
-                  </Stack>
-                )}
-                {documentPreview.filePath && (
-                  <Typography variant="body2">Arquivo: {documentPreview.filePath}</Typography>
                 )}
               </Stack>
               <Box mt={2} sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 1 }}>
@@ -706,29 +891,24 @@ const AppAppointments = () => {
         <DialogActions>
           <Button onClick={() => setIsDocumentDialogOpen(false)}>{t('common.cancel')}</Button>
           <Button variant="outlined" onClick={handleGenerateDocument} disabled={isDocumentGenerating}>
-            {isDocumentGenerating ? 'Gerando...' : 'Gerar rascunho'}
+            {isDocumentGenerating ? 'Gerando...' : 'Gerar preview'}
+          </Button>
+          <Button variant="outlined" onClick={handleSaveDraft} disabled={isSaveDraftDisabled}>
+            Salvar rascunho
           </Button>
           <Button
             variant="outlined"
             onClick={handleSignDocument}
-            disabled={
-              !documentPreview ||
-              documentPreview.status !== 'DRAFT' ||
-              isDocumentSigning
-            }
+            disabled={isSignDisabled}
           >
-            {isDocumentSigning ? 'Assinando...' : 'Assinar'}
+            {isDocumentSigning ? 'Assinando...' : 'Gerar assinatura'}
           </Button>
           <Button
             variant="contained"
             onClick={handleExportDocument}
-            disabled={
-              !documentPreview ||
-              (documentPreview.status !== 'SIGNED' && documentPreview.status !== 'EXPORTED') ||
-              isDocumentExporting
-            }
+            disabled={isExportDisabled}
           >
-            {isDocumentExporting ? 'Exportando...' : 'Exportar'}
+            {isDocumentExporting ? 'Exportando...' : 'Exportar HTML'}
           </Button>
         </DialogActions>
       </Dialog>
