@@ -1,11 +1,11 @@
 import { invoke } from '@tauri-apps/api/tauri';
 
 export type DocumentType = 'RELATORIO' | 'PARECER';
-export type DocumentStatus = 'DRAFT' | 'SIGNED' | 'EXPORTED';
+export type DocumentStatus = 'DRAFT' | 'SIGNED';
 
 export type DocumentGeneratePayload = {
   documentType: DocumentType;
-  officeName: string;
+  officeName?: string;
   generatedAt: string;
   clientId: string;
   clientName: string;
@@ -20,26 +20,12 @@ export type DocumentGeneratePayload = {
   appointmentId?: string;
 };
 
-export type DocumentDraftPayload = DocumentGeneratePayload;
-
-export type DocumentDraftResponse = {
-  documentId: string;
-  html: string;
-  status: DocumentStatus;
-};
-
-export type DocumentSignResponse = {
-  documentId: string;
-  htmlSigned: string;
-  hashHtml: string;
-  status: DocumentStatus;
-};
-
-export type DocumentExportPdfResponse = {
-  documentId: string;
-  filePath: string;
-  hashPdf: string;
-  status: DocumentStatus;
+export type DocumentDraftPayload = {
+  payloadJson: string;
+  htmlPreview: string;
+  title: string;
+  clientId?: string;
+  caseId?: string;
 };
 
 export type DocumentSummary = {
@@ -50,22 +36,21 @@ export type DocumentSummary = {
   status: DocumentStatus;
   createdAt: string;
   updatedAt: string;
-  hashHtml?: string | null;
-  hashPdf?: string | null;
+  contentSha256?: string | null;
 };
 
 export type DocumentDetail = {
   id: string;
   documentType: DocumentType;
   clientId?: string | null;
+  caseId?: string | null;
   title: string;
-  contentHtml: string;
-  hashHtml?: string | null;
-  lawyerName?: string | null;
-  lawyerOab?: string | null;
+  payloadJson: string;
+  htmlPreview: string;
+  contentSha256?: string | null;
+  signedByLawyerId?: string | null;
+  signedByLabel?: string | null;
   signedAt?: string | null;
-  filePath?: string | null;
-  hashPdf?: string | null;
   status: DocumentStatus;
   createdAt: string;
   updatedAt: string;
@@ -79,30 +64,11 @@ export type DocumentsListFilters = {
 
 export type DocumentHtmlResponse = {
   html: string;
-  documentId: string;
-  documentHash: string;
-  contentHash: string;
-  createdAt: string;
-  authoredByName: string;
-  authoredByOab?: string | null;
-};
-
-export type DocumentExportHtmlPayload = {
-  filePath: string;
-  documentId: string;
-  documentType?: DocumentType;
-  appointmentId?: string;
 };
 
 export type DocumentExportHtmlResponse = {
-  filePath: string;
-};
-
-export type DocumentLogExportPayload = {
-  documentId: string;
-  documentType?: DocumentType;
-  appointmentId?: string;
-  format: string;
+  filename: string;
+  html: string;
 };
 
 export const documentsGenerateHtml = async (
@@ -133,24 +99,15 @@ export const documentsGenerateHtml = async (
 export const documentsCreateDraft = async (
   sessionId: string,
   payload: DocumentDraftPayload
-): Promise<DocumentDraftResponse> => {
+): Promise<DocumentDetail> => {
   return invoke('documents_create_draft', {
     sessionId,
     payload: {
-      documentType: payload.documentType,
-      officeName: payload.officeName,
-      generatedAt: payload.generatedAt,
-      clientId: payload.clientId,
-      clientName: payload.clientName,
-      clientDocument: payload.clientDocument,
-      clientEmail: payload.clientEmail,
-      clientPhone: payload.clientPhone,
+      payloadJson: payload.payloadJson,
+      htmlPreview: payload.htmlPreview,
       title: payload.title,
-      attendanceDate: payload.attendanceDate,
-      history: payload.history,
-      analysis: payload.analysis,
-      conclusion: payload.conclusion,
-      appointmentId: payload.appointmentId
+      clientId: payload.clientId,
+      caseId: payload.caseId
     }
   });
 };
@@ -158,24 +115,24 @@ export const documentsCreateDraft = async (
 export const documentsSign = async (
   sessionId: string,
   documentId: string,
-  lawyerName: string,
-  lawyerOab: string
-): Promise<DocumentSignResponse> => {
+  lawyerId: string
+): Promise<DocumentDetail> => {
   return invoke('documents_sign', {
     sessionId,
     documentId,
-    lawyerName,
-    lawyerOab
+    lawyerId
   });
 };
 
-export const documentsExportPdf = async (
+export const documentsExportHtml = async (
   sessionId: string,
   documentId: string
-): Promise<DocumentExportPdfResponse> => {
-  return invoke('documents_export_pdf', {
+): Promise<DocumentExportHtmlResponse> => {
+  return invoke('documents_export_html', {
     sessionId,
-    documentId
+    payload: {
+      documentId
+    }
   });
 };
 
@@ -199,36 +156,6 @@ export const documentsList = async (
       documentType: filters.documentType,
       status: filters.status,
       clientId: filters.clientId
-    }
-  });
-};
-
-export const documentsExportHtml = async (
-  sessionId: string,
-  payload: DocumentExportHtmlPayload
-): Promise<DocumentExportHtmlResponse> => {
-  return invoke('documents_export_html', {
-    sessionId,
-    payload: {
-      filePath: payload.filePath,
-      documentId: payload.documentId,
-      documentType: payload.documentType,
-      appointmentId: payload.appointmentId
-    }
-  });
-};
-
-export const documentsLogExport = async (
-  sessionId: string,
-  payload: DocumentLogExportPayload
-): Promise<void> => {
-  return invoke('documents_log_export', {
-    sessionId,
-    payload: {
-      documentId: payload.documentId,
-      documentType: payload.documentType,
-      appointmentId: payload.appointmentId,
-      format: payload.format
     }
   });
 };
